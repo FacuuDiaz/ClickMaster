@@ -26,6 +26,8 @@ make down        # baja todo (clean = baja y borra los datos de MySQL)
 - MySQL queda expuesto en el host en `localhost:3307` (user/pass en `.env`).
 - La API mock (`docker/mock-api/cdrs.json`, servida por nginx en `localhost:8080`)
   trae 4 SMS: un link OK, un 404, un dominio inexistente y uno sin link.
+  `docker/mock-api/cdrs-dump.json` tiene los 20.000 CDRs del dump real
+  (`API_URL=http://mock-api/cdrs-dump.json`).
   Para usar la API real, cambiar `API_URL`/`API_TOKEN` en `.env`.
 - `make lock` regenera `package-lock.json` dentro de un container de Node
   (correrlo cada vez que se toque `package.json`).
@@ -50,6 +52,34 @@ cantidad exacta (redondeada): con 1000 SMS con link y `CLICK_PERCENTAGE=30`
 se chequean exactamente 300. Todos los SMS se cargan igual en `sms_content`;
 los SMS sin link no cuentan para el porcentaje. La respuesta de `/sync`
 incluye `linksFound`, `linksSelected` y `clickPercentage`.
+
+## Clicks manuales (URL × cantidad)
+
+Además del sync, se puede pedir que una URL se abra N veces. Cada visita usa un
+`BrowserContext` nuevo (sin cookies compartidas), se queda en la página un
+tiempo al azar entre `CLICK_DWELL_MIN_MS` y `CLICK_DWELL_MAX_MS` (default
+3–7 s), se cierra y el slot pasa a la siguiente. Corren `CHECK_CONCURRENCY`
+sesiones en paralelo.
+
+- **Duración:** ≈ `COUNT × 5 s ÷ CHECK_CONCURRENCY` (17114 visitas con 8 en
+  paralelo ≈ 3 h). En el servidor (1 núcleo, 2 GB) no conviene pasar de 8;
+  con `CLICK_BLOCK_RESOURCES=true` (no baja imágenes, fuentes ni video)
+  se puede probar 10–12. Los píxeles de tracking que sean imágenes no se
+  disparan con esa opción.
+- **Lanzar:** `make clicks URL=https://... COUNT=50`
+  (o `POST /clicks` con `{"url": "...", "count": 50}`, responde `202` al instante).
+- **Progreso:** `make clicks-status` (`GET /clicks`: job en curso + últimos 20;
+  `GET /clicks/:id` para uno) o `make logs`, que muestra cada visita
+  (`[clicks <id>] 12/50 ok (HTTP 200)`). Cuando `current` es `null` ya se
+  puede lanzar otro.
+- **Cancelar:** `make clicks-cancel` (`POST /clicks/cancel`). No arranca más
+  visitas; las abiertas terminan su sesión (unos segundos) y el job pasa de
+  `cancelling` a `cancelled`.
+- Un job a la vez y nunca en paralelo con `/sync` (los dos levantan Chromium
+  y el container tiene 2 GB): si hay algo corriendo responde `409`.
+  `CLICK_JOB_MAX_COUNT` (default 1000) es el tope de `count`.
+- El estado de los jobs vive en memoria (se pierde si se reinicia el
+  container); no se guarda nada en la base.
 
 ## Decisiones de diseño (por si hay que revisarlas)
 
@@ -78,10 +108,13 @@ incluye `linksFound`, `linksSelected` y `clickPercentage`.
 
 ## Pendiente / a confirmar con el equipo
 
-- **Mapeo exacto de campos del JSON de la API** (`src/parser/smsRecordSchema.ts`
-  asume que las keys del JSON coinciden 1:1 con las columnas de `sms_content`,
-  ej. `client_message_id`, `edr_date`, etc. — si la API devuelve otros nombres
-  hay que ajustar únicamente ese archivo).
+- **Formato de la API real** (confirmado con un dump de 20.000 CDRs,
+  `dumps/respuesta.json`): responde JSON-RPC (`{"result":{"data":[...]}}`),
+  prefija algunas keys con `t#` (`t#tech_details_json`, `t#translated_text`) y
+  manda fechas como `2026.09.30 12:18:55`. `src/parser/smsRecordSchema.ts`
+  normaliza todo eso (y sigue aceptando el array plano con fechas ISO de los
+  mocks). Las fechas de la API vienen sin zona, en hora local GMT-3: se
+  convierten y se guardan en UTC (`2026.09.30 12:18:55` → `15:18:55` UTC).
 - **Autenticación real contra la API externa** (`src/fetcher/apiClient.ts`
   asume Bearer token opcional vía `API_TOKEN`; si es otro esquema de auth,
   cambiar ahí).
@@ -90,6 +123,3 @@ incluye `linksFound`, `linksSelected` y `clickPercentage`.
   llamar a `runSync()` (`src/service/syncService.ts`) desde un cron interno
   o un trigger externo que le pegue a `POST /sync` — no hace falta tocar el
   resto del pipeline.
-- **Formato de fechas de la API:** el schema espera ISO 8601 (`2026-09-29T10:00:00Z`);
-  se convierten a `Date` y se guardan en UTC. Si la API real manda otro
-  formato (ej. `2026-09-29 10:00:00`), ajustar `src/parser/smsRecordSchema.ts`.

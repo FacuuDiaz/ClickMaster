@@ -39,4 +39,17 @@ export const config = {
     // les hace click. 100 = todos.
     clickPercentage: percentage("CLICK_PERCENTAGE", 100),
   },
+
+  clicker: {
+    // Tope de visitas por job de clicks manual (POST /clicks).
+    maxCount: Number(process.env.CLICK_JOB_MAX_COUNT ?? 1000),
+    // Cada sesion de browser se queda en la pagina un tiempo al azar en
+    // este rango antes de cerrarse y dejar lugar a la siguiente.
+    dwellMinMs: Number(process.env.CLICK_DWELL_MIN_MS ?? 3000),
+    dwellMaxMs: Number(process.env.CLICK_DWELL_MAX_MS ?? 7000),
+    // No descargar imagenes, fuentes ni video en las visitas: permite mas
+    // sesiones en paralelo con poca CPU/RAM. Ojo: los pixeles de tracking
+    // que sean imagenes no se disparan (los que son JS si).
+    blockResources: process.env.CLICK_BLOCK_RESOURCES === "true",
+  },
 };

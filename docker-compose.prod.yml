@@ -7,7 +7,9 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-3000}:3000" # solo accesible desde el host, /sync no tiene auth
     shm_size: "1gb"
-    mem_limit: 2g
+    # El servidor tiene 2 GB en total (y la base puede correr ahi mismo):
+    # con este tope, si Chromium se pasa, se cae solo la app y no MySQL.
+    mem_limit: 1200m
     env_file:
       - .env
     networks:
