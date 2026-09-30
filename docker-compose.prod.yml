@@ -1,0 +1,19 @@
+# Entorno SERVIDOR: solo la app, conectada a la base que ya existe en la red
+# externa `tmob_network`. DB_HOST en .env = nombre del container de la base.
+services:
+  app:
+    build: .
+    container_name: click-master
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000" # solo accesible desde el host, /sync no tiene auth
+    shm_size: "1gb"
+    mem_limit: 2g
+    env_file:
+      - .env
+    networks:
+      - tmob_network
+    restart: unless-stopped
+
+networks:
+  tmob_network:
+    external: true
