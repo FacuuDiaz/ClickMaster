@@ -68,13 +68,30 @@ sesiones en paralelo.
   disparan con esa opción.
 - **Lanzar:** `make clicks URL=https://... COUNT=50`
   (o `POST /clicks` con `{"url": "...", "count": 50}`, responde `202` al instante).
-- **Progreso:** `make clicks-status` (`GET /clicks`: job en curso + últimos 20;
+- **Desde un archivo:** `make clicks-file` (o `FILE=otro.txt`) lee
+  `clicks_to_do.txt`, una línea por job con el formato `url,cantidad`
+  (las líneas vacías y las que empiezan con `#` se ignoran):
+
+  ```
+  https://cutt.ly/LynGthw7,300
+  https://79en9.com,50
+  ```
+
+  Se manda entero a `POST /clicks/batch` (`text/plain`) y cada línea queda
+  como un job en cola: corren de a uno, en orden, igual que hacer un
+  `make clicks` por línea esperando a que termine el anterior. Se valida
+  todo antes de arrancar: si alguna línea está mal responde `400` con el
+  número de línea de cada error y no encola nada. Cada `cantidad` respeta
+  `CLICK_JOB_MAX_COUNT`.
+- **Progreso:** `make clicks-status` (`GET /clicks`: job en curso, los que esperan en `queued` y los últimos 20;
   `GET /clicks/:id` para uno) o `make logs`, que muestra cada visita
   (`[clicks <id>] 12/50 ok (HTTP 200)`). Cuando `current` es `null` ya se
   puede lanzar otro.
 - **Cancelar:** `make clicks-cancel` (`POST /clicks/cancel`). No arranca más
   visitas; las abiertas terminan su sesión (unos segundos) y el job pasa de
-  `cancelling` a `cancelled`.
+  `cancelling` a `cancelled`. Si venía de un archivo, los jobs que
+  esperaban en cola pasan directo a `cancelled` (`cancelledQueued` en la
+  respuesta).
 - Un job a la vez y nunca en paralelo con `/sync` (los dos levantan Chromium
   y el container tiene 2 GB): si hay algo corriendo responde `409`.
   `CLICK_JOB_MAX_COUNT` (default 1000) es el tope de `count`.

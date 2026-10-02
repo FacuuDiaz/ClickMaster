@@ -12,7 +12,7 @@ APP_PORT ?= 3000
 
 .DEFAULT_GOAL := help
 .PHONY: help env lock setup up down restart build logs ps sync sync-once health \
-        clicks clicks-status clicks-cancel db-shell db-checks clean prod-up prod-down prod-logs prod-sync
+        clicks clicks-file clicks-status clicks-cancel db-shell db-checks clean prod-up prod-down prod-logs prod-sync
 
 help: ## Muestra esta ayuda
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(firstword $(MAKEFILE_LIST)) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -60,6 +60,12 @@ clicks: ## Lanza un job de clicks: make clicks URL=https://... COUNT=50
 	@test -n "$(URL)" -a -n "$(COUNT)" || (echo "Uso: make clicks URL=https://... COUNT=50" && exit 1)
 	@curl -s -X POST http://localhost:$(APP_PORT)/clicks -H 'Content-Type: application/json' \
 		-d '{"url":"$(URL)","count":$(COUNT)}'; echo
+
+FILE ?= clicks_to_do.txt
+clicks-file: ## Un job por linea (url,cantidad) de un archivo: make clicks-file [FILE=clicks_to_do.txt]
+	@test -f "$(FILE)" || (echo "No existe $(FILE) (formato: url,cantidad por linea)" && exit 1)
+	@curl -s -X POST http://localhost:$(APP_PORT)/clicks/batch -H 'Content-Type: text/plain' \
+		--data-binary @"$(FILE)"; echo
 
 clicks-status: ## Estado del job de clicks en curso y los ultimos jobs
 	@curl -s http://localhost:$(APP_PORT)/clicks; echo

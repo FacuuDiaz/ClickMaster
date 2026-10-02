@@ -4,7 +4,7 @@ import pLimit from "p-limit";
 import { config } from "../config";
 import { visitUrl } from "../checker/linkChecker";
 
-export type ClickJobStatus = "running" | "cancelling" | "cancelled" | "done" | "failed";
+export type ClickJobStatus = "queued" | "running" | "cancelling" | "cancelled" | "done" | "failed";
 
 export interface ClickJob {
   id: string;
@@ -14,7 +14,10 @@ export interface ClickJob {
   ok: number;
   failed: number;
   status: ClickJobStatus;
-  startedAt: Date;
+  // Si el job vino de un archivo (POST /clicks/batch): a que lote pertenece
+  // y que posicion ocupa (1-based) entre las lineas validas.
+  batch: { id: string; index: number; size: number } | null;
+  startedAt: Date | null; // null mientras esta en cola
   finishedAt: Date | null;
   // Ultimo error de navegacion (o el que tiro abajo el job entero), para
   // tener una pista rapida desde la pantalla de progreso.
@@ -25,10 +28,12 @@ export interface ClickJob {
 // mirar el progreso; si hace falta historial persistente, guardarlo en la base.
 const MAX_HISTORY = 20;
 const jobs: ClickJob[] = [];
+// Jobs esperando turno (de un lote): corren de a uno, en orden.
+const queue: ClickJob[] = [];
 let current: ClickJob | null = null;
 
 export function isClickJobRunning(): boolean {
-  return current !== null;
+  return current !== null || queue.length > 0;
 }
 
 export function getCurrentClickJob(): ClickJob | null {
@@ -36,26 +41,49 @@ export function getCurrentClickJob(): ClickJob | null {
 }
 
 export function getClickJob(id: string): ClickJob | undefined {
-  return jobs.find((job) => job.id === id);
+  return jobs.find((job) => job.id === id) ?? queue.find((job) => job.id === id);
 }
 
 export function listClickJobs(): ClickJob[] {
   return jobs;
 }
 
+export function listQueuedClickJobs(): ClickJob[] {
+  return queue;
+}
+
+function addToHistory(job: ClickJob): void {
+  jobs.unshift(job);
+  jobs.splice(MAX_HISTORY);
+}
+
 /**
- * Pide cancelar el job en curso: no arranca ninguna visita nueva y las que
- * ya estan abiertas terminan su sesion (a lo sumo unos segundos). El job
- * queda en "cancelling" hasta que cierran y despues en "cancelled".
- * Devuelve el job, o null si no habia ninguno corriendo.
+ * Pide cancelar el job en curso y descarta los que estaban en cola: no
+ * arranca ninguna visita nueva y las que ya estan abiertas terminan su
+ * sesion (a lo sumo unos segundos). El job en curso queda en "cancelling"
+ * hasta que cierran y despues en "cancelled"; los de la cola pasan
+ * directo a "cancelled".
+ * Devuelve el job en curso (o null si no habia ninguno) y cuantos se
+ * sacaron de la cola.
  */
-export function cancelCurrentClickJob(): ClickJob | null {
+export function cancelCurrentClickJob(): { job: ClickJob; cancelledQueued: number } | null {
   if (!current) return null;
   if (current.status === "running") {
     current.status = "cancelling";
     console.log(`[clicks ${current.id}] cancelacion pedida en ${current.completed}/${current.total}`);
   }
-  return current;
+
+  const dropped = queue.splice(0);
+  for (const job of dropped) {
+    job.status = "cancelled";
+    job.finishedAt = new Date();
+    addToHistory(job);
+  }
+  if (dropped.length > 0) {
+    console.log(`[clicks] ${dropped.length} jobs en cola cancelados`);
+  }
+
+  return { job: current, cancelledQueued: dropped.length };
 }
 
 function randomDwellMs(): number {
@@ -73,46 +101,76 @@ function randomDwellMs(): number {
  * isClickJobRunning() antes.
  */
 export function startClickJob(url: string, count: number): ClickJob {
-  if (current) {
+  return enqueue([{ url, count }], null)[0];
+}
+
+/**
+ * Encola un job por item (ej. cada linea de clicks_to_do.txt). Corren uno
+ * detras del otro, en el orden recibido, igual que si se lanzara cada uno
+ * con startClickJob apenas termina el anterior. Devuelve enseguida.
+ */
+export function startClickBatch(items: { url: string; count: number }[]): ClickJob[] {
+  return enqueue(items, randomUUID());
+}
+
+function enqueue(items: { url: string; count: number }[], batchId: string | null): ClickJob[] {
+  if (isClickJobRunning()) {
     throw new Error("Ya hay un job de clicks en curso");
   }
 
-  const job: ClickJob = {
-    id: randomUUID(),
-    url,
-    total: count,
-    completed: 0,
-    ok: 0,
-    failed: 0,
-    status: "running",
-    startedAt: new Date(),
-    finishedAt: null,
-    lastError: null,
-  };
-
-  jobs.unshift(job);
-  jobs.splice(MAX_HISTORY);
-  current = job;
-  console.log(`[clicks ${job.id}] inicio: ${count} visitas a ${url}`);
-
-  runClickJob(job)
-    .then(() => {
-      job.status = job.status === "cancelling" ? "cancelled" : "done";
+  const created = items.map(
+    (item, i): ClickJob => ({
+      id: randomUUID(),
+      url: item.url,
+      total: item.count,
+      completed: 0,
+      ok: 0,
+      failed: 0,
+      status: "queued",
+      batch: batchId ? { id: batchId, index: i + 1, size: items.length } : null,
+      startedAt: null,
+      finishedAt: null,
+      lastError: null,
     })
-    .catch((err) => {
+  );
+
+  queue.push(...created);
+  if (batchId) {
+    console.log(`[clicks] lote ${batchId}: ${created.length} jobs encolados`);
+  }
+  void drainQueue();
+  return created;
+}
+
+async function drainQueue(): Promise<void> {
+  // Sin awaits entre que termina un job y arranca el siguiente:
+  // isClickJobRunning() nunca ve un hueco en el medio.
+  for (let job = queue.shift(); job; job = queue.shift()) {
+    job.status = "running";
+    job.startedAt = new Date();
+    addToHistory(job);
+    current = job;
+    const step = job.batch ? ` (lote ${job.batch.index}/${job.batch.size})` : "";
+    console.log(`[clicks ${job.id}] inicio${step}: ${job.total} visitas a ${job.url}`);
+
+    try {
+      await runClickJob(job);
+      // cancelCurrentClickJob() puede haberlo pasado a "cancelling" durante el
+      // await; TS no lo ve y lo sigue tomando como "running".
+      const status = job.status as ClickJobStatus;
+      job.status = status === "cancelling" ? "cancelled" : "done";
+    } catch (err) {
       console.error(`Error en el job de clicks ${job.id}:`, err);
       job.status = "failed";
       job.lastError = err instanceof Error ? err.message : String(err);
-    })
-    .finally(() => {
+    } finally {
       job.finishedAt = new Date();
       current = null;
       console.log(
         `[clicks ${job.id}] fin (${job.status}): ${job.ok} ok, ${job.failed} fallos de ${job.total}`
       );
-    });
-
-  return job;
+    }
+  }
 }
 
 async function runClickJob(job: ClickJob): Promise<void> {

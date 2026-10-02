@@ -9,9 +9,12 @@ import {
   getCurrentClickJob,
   isClickJobRunning,
   listClickJobs,
+  listQueuedClickJobs,
   cancelCurrentClickJob,
+  startClickBatch,
   startClickJob,
 } from "./clicker/clickJob";
+import { parseClickList } from "./clicker/parseClickList";
 
 const app = express();
 app.use(express.json());
@@ -83,23 +86,52 @@ app.post("/clicks", (req, res) => {
   res.status(202).json(job);
 });
 
+// Lanza un job por linea de un archivo tipo clicks_to_do.txt (`url,cantidad`
+// por linea), mandado como text/plain. Corren de a uno, en orden. Si alguna
+// linea es invalida responde 400 con todos los errores y no encola nada.
+app.post("/clicks/batch", express.text({ type: "*/*", limit: "1mb" }), (req, res) => {
+  const parsed = parseClickList(typeof req.body === "string" ? req.body : "");
+  if (!parsed.ok) {
+    res.status(400).json({ error: "Archivo invalido", details: parsed.errors });
+    return;
+  }
+  if (isClickJobRunning()) {
+    res.status(409).json({ error: "Ya hay un job de clicks en curso" });
+    return;
+  }
+  if (syncInProgress) {
+    res.status(409).json({ error: "Hay un sync en curso" });
+    return;
+  }
+
+  const jobs = startClickBatch(parsed.items);
+  res.status(202).json({
+    batchId: jobs[0].batch?.id,
+    jobs: jobs.length,
+    totalVisits: jobs.reduce((sum, job) => sum + job.total, 0),
+    items: jobs.map((job) => ({ id: job.id, url: job.url, count: job.total })),
+  });
+});
+
 app.get("/clicks", (_req, res) => {
   res.json({
     current: getCurrentClickJob(),
+    queued: listQueuedClickJobs(),
     syncInProgress,
     jobs: listClickJobs(),
   });
 });
 
-// Cancela el job en curso: no se lanzan visitas nuevas y las abiertas
-// terminan su sesion. Se puede lanzar otro cuando `current` sea null.
+// Cancela el job en curso y los que esperan en cola: no se lanzan visitas
+// nuevas y las abiertas terminan su sesion. Se puede lanzar otro cuando
+// `current` sea null.
 app.post("/clicks/cancel", (_req, res) => {
-  const job = cancelCurrentClickJob();
-  if (!job) {
+  const cancelled = cancelCurrentClickJob();
+  if (!cancelled) {
     res.status(404).json({ error: "No hay ningun job de clicks corriendo" });
     return;
   }
-  res.json(job);
+  res.json({ ...cancelled.job, cancelledQueued: cancelled.cancelledQueued });
 });
 
 app.get("/clicks/:id", (req, res) => {
