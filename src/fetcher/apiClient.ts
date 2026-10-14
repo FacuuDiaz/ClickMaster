@@ -23,7 +23,7 @@ let requestId = 0;
 
 function buildRequest(range: EdrRange) {
   const offset = config.edr.timezoneOffsetMinutes;
-  const args: Record<string, string> = {
+  const args: Record<string, unknown> = {
     start_date: formatApiDate(range.start, offset),
     end_date: formatApiDate(range.end, offset),
   };
@@ -32,6 +32,7 @@ function buildRequest(range: EdrRange) {
     args.op_country = "==";
     args.country = config.edr.country;
   }
+  Object.assign(args, config.edr.extraArgs);
   return {
     id: ++requestId,
     jsonrpc: "2.0",

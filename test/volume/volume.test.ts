@@ -6,7 +6,7 @@ import { claimJobs } from "../../src/db/processingRepo";
 import { ingestWindow } from "../../src/service/ingestService";
 import type { EdrRange } from "../../src/fetcher/apiClient";
 import { count, resetTables, rows, setupTestDb } from "../helpers/db";
-import { syntheticSource } from "../helpers/fixtures";
+import { rawRecord, syntheticSource } from "../helpers/fixtures";
 
 /**
  * Prueba de volumen: una ventana de 30 min con ~20.000 SMS sinteticos
@@ -116,4 +116,50 @@ test("ingesta de una ventana de ~20.000 SMS", async () => {
     reclamo16Ms: claimMs,
   };
   console.log(`\nRESULTADO VOLUMEN ${JSON.stringify(report, null, 2)}`);
+});
+
+test("rafaga real: >20.000 SMS en 36 s con una API que corta en 20.000", async () => {
+  await resetTables();
+  config.edr.maxRowsPerRequest = 20_000;
+  config.edr.minSplitSeconds = 1;
+  // Como el dump del 2026.10.02: 25.000 SMS entre 00:45:31 y 00:46:07 (GMT-3)
+  // mas ~1 por minuto de base el resto de la ventana.
+  const burstStart = new Date("2026-10-02T03:45:31Z").getTime();
+  const all = [
+    ...Array.from({ length: 25_000 }, (_, i) =>
+      rawRecord(1_000_000 + i, new Date(burstStart + Math.floor((i * 36_000) / 25_000 / 1000) * 1000))
+    ),
+    ...Array.from({ length: 30 }, (_, i) => rawRecord(i, new Date(Date.parse("2026-10-02T03:30:00Z") + i * 60_000))),
+  ];
+  const requests: { span: number; rows: number }[] = [];
+  const fetcher = async (r: EdrRange) => {
+    const inRange = all.filter((x) => {
+      const t = Date.parse(x.edr_date.replace(/\./g, "-").replace(" ", "T") + "-03:00");
+      return t >= r.start.getTime() && t <= r.end.getTime();
+    });
+    // Alaris corta en 20.000 y sin orden por fecha: se mezcla antes de cortar.
+    inRange.sort(() => Math.random() - 0.5);
+    const rows = inRange.slice(0, 20_000);
+    requests.push({ span: (r.end.getTime() - r.start.getTime()) / 1000, rows: rows.length });
+    return JSON.parse(JSON.stringify(rows)) as unknown[];
+  };
+
+  const run = await ingestWindow(
+    "manual",
+    { start: new Date("2026-10-02T03:30:00Z"), end: new Date("2026-10-02T04:00:00Z") },
+    { fetcher }
+  );
+  assert.equal(run.status, "success", run.error ?? "");
+  assert.equal(await count("SELECT COUNT(*) FROM sms_content"), all.length);
+  const capped = requests.filter((r) => r.rows >= 20_000).length;
+  console.log(
+    `\nRESULTADO RAFAGA ${JSON.stringify({
+      smsGuardados: all.length,
+      pedidosALaApi: requests.length,
+      pedidosEnElTope: capped,
+      // Con Alaris un pedido de 20.000 tardo ~40 s; los chicos, pocos segundos.
+      estimadoRealMin: Math.round((capped * 40 + (requests.length - capped) * 10) / 60),
+      rangos: requests.map((r) => `${r.span}s:${r.rows}`),
+    }, null, 2)}`
+  );
 });

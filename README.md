@@ -154,13 +154,16 @@ no avanza).
   copia completa: los registros se validan con Zod **de a lotes**
   (`INGEST_DB_BATCH_SIZE`) y el array original se va vaciando a medida que
   se persiste, así el GC libera la respuesta mientras se procesa.
-- **Tope de filas:** el dump real de 20.000 CDRs cubría solo 1,5 minutos
-  (`00:45:00`–`00:46:29`), o sea que la API probablemente **corta en 20.000
-  filas**. Si una respuesta llega a `EDR_MAX_ROWS_PER_REQUEST`, se descarta y
+- **Tope de filas confirmado: Alaris corta en 20.000 filas** y no por orden
+  de fecha. Con el producto 1286, `2026.10.02 00:45:00`–`00:46:30` trajo
+  20.000 justas, todas de una ráfaga de ~36 s (más de 20.000 SMS en ese
+  lapso), en ~40 s y ~40 MB. Si una respuesta llega a `EDR_MAX_ROWS_PER_REQUEST`, se descarta y
   el rango se pide en dos mitades, recursivamente, hasta
   `EDR_MIN_SPLIT_SECONDS`. Si incluso ese rango mínimo llega al tope, la
   corrida falla con un error explícito en vez de perder datos en silencio.
-  **Hay que confirmarlo con `make edr-probe`.**
+  Con `EDR_MIN_SPLIT_SECONDS=1`, una ventana de 30 min con una ráfaga así
+  se resuelve en ~11 pedidos (5 en el tope, que se descartan), unos 4
+  minutos (`make test-volume`, escenario "rafaga").
 - Prueba de volumen (`make test-volume`, 20.000 SMS sintéticos, MySQL local):
   ~2,3 s de ingesta, 325 consultas SQL (40 lotes de 500), pico de heap de
   ~80 MB. Una re-ingesta solapada no crea nada. Reclamar 16 trabajos con
@@ -295,7 +298,7 @@ Las principales:
 | `EDR_CLIENT_PRODUCT_ID`, `EDR_COUNTRY` | vacío | Filtros del request (si están vacíos no se mandan) |
 | `EDR_TIMEZONE_OFFSET` | `-03:00` | Zona de las fechas de la API |
 | `EDR_WINDOW_MINUTES` / `EDR_SAFETY_DELAY_MINUTES` / `EDR_OVERLAP_MINUTES` | 30 / 5 / 0 | Ventanas |
-| `EDR_MAX_ROWS_PER_REQUEST` / `EDR_MIN_SPLIT_SECONDS` | 20000 / 60 | Tope de la API y partición de ventanas (0 = sin tope, no parte nunca) |
+| `EDR_MAX_ROWS_PER_REQUEST` / `EDR_MIN_SPLIT_SECONDS` | 20000 / 1 | Tope de la API y partición de ventanas (0 = sin tope, no parte nunca) |
 | `EDR_HTTP_TIMEOUT_MS` / `EDR_MAX_RETRIES` | 600000 / 1 | Tiempo máximo para recibir la respuesta completa de Alaris (puede tardar minutos) / reintentos |
 | `INGEST_DB_BATCH_SIZE` | 500 | Filas por transacción (máx. 2000) |
 | `CHECK_CONCURRENCY` | 4 | Sesiones de Chromium simultáneas (worker y clicks) |

@@ -39,7 +39,13 @@ async function main() {
   console.log(
     JSON.stringify(
       {
-        pedido: { start_date: formatApiDate(start, offset), end_date: endText },
+        pedido: {
+          start_date: formatApiDate(start, offset),
+          end_date: endText,
+          client_product_id: config.edr.clientProductId ?? null,
+          country: config.edr.country ?? null,
+          extraArgs: config.edr.extraArgs,
+        },
         filas: data.length,
         identidadesUnicas: ids.size,
         llegoAlTope: config.edr.maxRowsPerRequest > 0 && data.length >= config.edr.maxRowsPerRequest,

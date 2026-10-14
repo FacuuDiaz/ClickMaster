@@ -60,6 +60,23 @@ function edrAuth(url: string): string | undefined {
   return auth;
 }
 
+// Argumentos extra (o que pisan a los de arriba) para el "args" del JSON-RPC,
+// como objeto JSON. Ej: {"client_product_id": 1286} para mandarlo numerico.
+function jsonObject(name: string): Record<string, unknown> {
+  const raw = process.env[name];
+  if (!raw) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${name} tiene que ser un objeto JSON valido`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${name} tiene que ser un objeto JSON`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
 const edrUrl = required("EDR_URL", "API_URL");
 
 export const config = {
@@ -89,6 +106,7 @@ export const config = {
     cursorName: process.env.EDR_CURSOR_NAME || "get_sms_edr",
     clientProductId: optional("EDR_CLIENT_PRODUCT_ID"),
     country: optional("EDR_COUNTRY"),
+    extraArgs: jsonObject("EDR_EXTRA_ARGS"),
     timezoneOffsetMinutes: timezoneOffsetMinutes("EDR_TIMEZONE_OFFSET", "-03:00"),
     // Alaris puede tardar varios minutos en devolver ~20.000 EDR.
     httpTimeoutMs: int("EDR_HTTP_TIMEOUT_MS", 600000, 1000),
@@ -98,7 +116,9 @@ export const config = {
     // a este numero se asume truncada y la ventana se parte en dos.
     // 0 = sin tope (nunca se parte).
     maxRowsPerRequest: int("EDR_MAX_ROWS_PER_REQUEST", 20000, 0),
-    minSplitSeconds: int("EDR_MIN_SPLIT_SECONDS", 60, 1),
+    // Una rafaga real de un solo producto supero 20.000 SMS en ~36 s: el
+    // rango minimo tiene que poder bajar a pocos segundos.
+    minSplitSeconds: int("EDR_MIN_SPLIT_SECONDS", 1, 1),
   },
 
   ingest: {

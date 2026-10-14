@@ -48,7 +48,7 @@ setup: env package-lock.json ## Deja todo listo para levantar (.env + lockfile)
 # ---------- Ciclo de vida ----------
 
 up: setup ## Levanta todo (app con scheduler + worker, MySQL y el mock si COMPOSE_PROFILES=mock)
-	$(COMPOSE) up -d --build
+	$(COMPOSE) up -d --build --remove-orphans
 	@echo "App: $(API)  |  probar con: make health / make sync-status / make queue"
 
 down: ## Baja los containers (conserva los datos de MySQL)
@@ -81,11 +81,17 @@ ingest-window: ## Ingesta una ventana puntual: make ingest-window START="2026.10
 	@$(CURL) -X POST $(API)/sync -H 'Content-Type: application/json' \
 		-d '{"start":"$(START)","end":"$(END)"}' $(PRETTY)
 
-sync-once: setup ## Ingesta por consola en un container efimero (sin HTTP)
+sync-once: build ## Ingesta por consola en un container efimero (sin HTTP)
 	$(COMPOSE) run --rm app node dist/cli.js
 
-edr-probe: ## Consulta de diagnostico a la API EDR, sin guardar nada: make edr-probe [START=... END=...]
-	$(COMPOSE) run --rm --no-deps -T app node dist/edrProbe.js $(if $(START),"$(START)" "$(END)",)
+# PRODUCT=, COUNTRY= y EXTRA_ARGS= pisan lo del .env solo para esta prueba
+# (PRODUCT= vacio = sin filtro de producto).
+PROBE_ENV := $(if $(filter command line,$(origin PRODUCT)),-e EDR_CLIENT_PRODUCT_ID=$(PRODUCT),) \
+	$(if $(filter command line,$(origin COUNTRY)),-e EDR_COUNTRY=$(COUNTRY),) \
+	$(if $(filter command line,$(origin EXTRA_ARGS)),-e 'EDR_EXTRA_ARGS=$(EXTRA_ARGS)',)
+
+edr-probe: build ## Consulta a la API EDR sin guardar nada: make edr-probe START=... END=... [PRODUCT=] [COUNTRY=] [EXTRA_ARGS='{...}']
+	$(COMPOSE) run --rm --no-deps -T $(PROBE_ENV) app node dist/edrProbe.js $(if $(START),"$(START)" "$(END)",)
 
 sync-status: ## Ultima corrida y cursor del scheduler
 	@$(CURL) $(API)/sync/status $(PRETTY)

@@ -64,6 +64,20 @@ describe("cliente JSON-RPC de EDR", () => {
     });
   });
 
+  test("EDR_EXTRA_ARGS agrega o pisa argumentos (ej. producto numerico)", async () => {
+    respond = () => ({ status: 200, json: { result: { data: [] } } });
+    config.edr.extraArgs = { client_product_id: 1286, otro: "x" };
+    try {
+      await fetchEdrRange(range);
+    } finally {
+      config.edr.extraArgs = {};
+    }
+    const { args } = received[0].body.params;
+    assert.equal(args.client_product_id, 1286);
+    assert.equal(args.otro, "x");
+    assert.equal(args.country, "Brazil");
+  });
+
   test("un error JSON-RPC falla sin reintentar y sin filtrar el auth", async () => {
     respond = () => ({ status: 200, json: { jsonrpc: "2.0", id: 1, error: { code: 401, message: "auth invalido" } } });
     await assert.rejects(fetchEdrRange(range), (err: unknown) => {
