@@ -50,6 +50,18 @@ function optional(name: string): string | undefined {
 const checkConcurrency = int("CHECK_CONCURRENCY", 4, 1, 32);
 const linkCheckTimeoutMs = int("LINK_CHECK_TIMEOUT_MS", 15000, 1000);
 
+// Sin auth Alaris responde error en cada corrida: mejor no arrancar y
+// decirlo claro. El mock local no lo necesita.
+function edrAuth(url: string): string | undefined {
+  const auth = optional("EDR_AUTH");
+  if (!auth && !/mock-edr|127\.0\.0\.1|localhost/.test(url)) {
+    throw new Error("Falta la variable de entorno EDR_AUTH (el \"auth\" del JSON-RPC de Alaris)");
+  }
+  return auth;
+}
+
+const edrUrl = required("EDR_URL", "API_URL");
+
 export const config = {
   port: int("PORT", 3000, 1, 65535),
   logLevel: (process.env.LOG_LEVEL ?? "info") as "debug" | "info" | "warn" | "error",
@@ -68,9 +80,9 @@ export const config = {
 
   edr: {
     // API_URL queda como alias para no romper .env viejos.
-    url: required("EDR_URL", "API_URL"),
+    url: edrUrl,
     // Va en params.auth del JSON-RPC. Nunca se loguea ni se devuelve.
-    auth: optional("EDR_AUTH"),
+    auth: edrAuth(edrUrl),
     // Bearer opcional, solo si la API real lo pide ademas del auth del body.
     bearerToken: optional("API_TOKEN"),
     method: process.env.EDR_METHOD || "Enterprise.Cursor",

@@ -108,5 +108,5 @@ export async function persistSmsBatch(
       jobsCreated,
       jobsSkipped: jobs.length - jobsCreated,
     };
-  });
+  }, { retries: 3 });
 }

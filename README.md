@@ -201,9 +201,12 @@ retry   ──claim──┘      │──fallo transitorio──────�
 skipped: sin link (sin_link) o fuera de la muestra de CLICK_PERCENTAGE (fuera_de_muestra)
 ```
 
-- **Reclamo:** `SELECT ... FOR UPDATE SKIP LOCKED` en una transacción corta,
-  forzando el índice `idx_next_attempt` (sin él MySQL elegía full scan y
-  bloqueaba toda la tabla). Dos workers nunca agarran la misma fila. Se
+- **Reclamo:** `SELECT ... FOR UPDATE SKIP LOCKED` en una transacción corta
+  en READ COMMITTED, forzando el índice `idx_next_attempt`. Sin el índice
+  forzado, MySQL elegía full scan y bloqueaba toda la tabla. En REPEATABLE
+  READ, el `FOR UPDATE` toma gap locks y dos workers reclamando a la vez
+  terminaban en deadlock. Igual, las transacciones de la cola y de la
+  ingesta se reintentan solas ante un deadlock. Dos workers nunca agarran la misma fila. Se
   reclaman lotes chicos (`WORKER_CLAIM_BATCH_SIZE`) solo cuando el buffer
   local está vacío: en memoria nunca hay más que `CHECK_CONCURRENCY` visitas
   en curso más un lote esperando.

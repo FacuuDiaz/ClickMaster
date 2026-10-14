@@ -136,7 +136,7 @@ export async function claimJobs(
       [workerId, new Date(now.getTime() + leaseMs), now, claimed]
     );
     return claimed;
-  });
+  }, { isolation: "READ COMMITTED", retries: 3 });
   if (ids.length === 0) return [];
 
   const [rows] = await pool.query<RowDataPacket[]>(
@@ -240,7 +240,7 @@ export async function completeAttempt(r: AttemptResult): Promise<boolean> {
       ]
     );
     return result.affectedRows === 1;
-  });
+  }, { retries: 3 });
 }
 
 /** Cierra un trabajo sin visita (ej. el SMS ya no existe o no tiene link). */

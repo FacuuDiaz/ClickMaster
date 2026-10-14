@@ -20,7 +20,7 @@ PRETTY   := $(if $(shell command -v jq 2>/dev/null),| jq .,; echo)
 TEST_RUN := $(COMPOSE) run --rm -T \
 	-e DB_NAME=$(DB_NAME)_test -e DB_USER=root -e DB_PASSWORD=$(DB_ROOT_PASSWORD) \
 	-e SCHEDULER_ENABLED=false -e WORKER_ENABLED=false -e LOG_LEVEL=error \
-	-e EDR_URL=http://edr.invalid/ -e EDR_AUTH= \
+	-e EDR_URL=http://edr.invalid/ -e EDR_AUTH=auth-de-test \
 	-v $(CURDIR)/src:/app/src:ro -v $(CURDIR)/test:/app/test:ro app
 
 .DEFAULT_GOAL := help
