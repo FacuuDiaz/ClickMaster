@@ -1,50 +1,15 @@
-import { chromium, type Browser } from "playwright";
-import pLimit from "p-limit";
+import { chromium, type Browser, type Page } from "playwright";
 import { config } from "../config";
-
-export interface LinkCheckTarget {
-  smsContentId: number;
-  link: string;
-}
-
-export interface LinkCheckResult {
-  smsContentId: number;
-  link: string;
-  checkedAt: Date;
-  httpStatus: number | null;
-  ok: boolean;
-  responseTimeMs: number | null;
-  errorMessage: string | null;
-}
+import { classifyError, classifyResponse, type VisitOutcome } from "./classifyVisit";
 
 /**
- * Verifica en paralelo que cada link cargue (health check, no scraping).
- *
- * - Un solo Browser para toda la corrida (se lanza una vez y se cierra al
- *   final, evita el costo de levantar Chromium por cada link).
- * - N BrowserContext concurrentes, uno por link, limitados por
- *   CHECK_CONCURRENCY via p-limit: apenas se libera un slot arranca el
- *   siguiente inmediatamente -- sin sleeps ni delays artificiales entre
- *   navegadores.
- * - Cada context se cierra apenas termina su chequeo, asi la memoria no
- *   se va acumulando durante la corrida.
+ * Chromium headless para el worker y los clicks manuales. Playwright por
+ * defecto mata el navegador apenas llega SIGTERM/SIGINT: eso cortaba las
+ * visitas en curso en el `docker stop` y tiraba el proceso. Las senales las
+ * maneja server.ts (apagado ordenado), que cierra el navegador al final.
  */
-export async function checkLinks(
-  targets: LinkCheckTarget[]
-): Promise<LinkCheckResult[]> {
-  if (targets.length === 0) return [];
-
-  const browser = await chromium.launch({ headless: true });
-  const limit = pLimit(config.checker.concurrency);
-
-  try {
-    const results = await Promise.all(
-      targets.map((target) => limit(() => checkOne(browser, target)))
-    );
-    return results;
-  } finally {
-    await browser.close();
-  }
+export function launchBrowser(): Promise<Browser> {
+  return chromium.launch({ headless: true, handleSIGTERM: false, handleSIGINT: false, handleSIGHUP: false });
 }
 
 export interface VisitOptions {
@@ -53,30 +18,72 @@ export interface VisitOptions {
   // Aborta imagenes, fuentes y video/audio: baja CPU, RAM y red por sesion.
   // El documento (y su JS) se sigue cargando normal.
   blockResources?: boolean;
+  timeoutMs?: number;
 }
 
 const BLOCKED_RESOURCE_TYPES = new Set(["image", "media", "font"]);
 
 export interface VisitResult {
   httpStatus: number | null;
+  // Respuesta HTTP 2xx/3xx. NO alcanza para decir que la pagina se vio bien:
+  // para eso esta `outcome` (ver classifyVisit.ts).
   ok: boolean;
+  outcome: VisitOutcome;
   responseTimeMs: number;
+  // URL final, solo si es distinta de la pedida (hubo redireccion).
+  finalUrl: string | null;
+  redirects: number;
   errorMessage: string | null;
+}
+
+// Una redireccion por JS justo despues de domcontentloaded destruye el
+// contexto en el medio del evaluate: se espera a que cargue la nueva y se
+// prueba una vez mas.
+async function pageHasContent(page: Page): Promise<boolean | null> {
+  // Como string: corre en el navegador y el proyecto no compila con los tipos del DOM.
+  const probe = async () =>
+    (await page.evaluate(
+      "!!document.body && (document.body.innerText.trim().length > 0 || document.body.children.length > 0)"
+    )) === true;
+  try {
+    return await probe();
+  } catch {
+    try {
+      await page.waitForLoadState("domcontentloaded", { timeout: 5000 });
+      return await probe();
+    } catch {
+      return null;
+    }
+  }
 }
 
 /**
  * Abre `url` en un BrowserContext nuevo (sin cookies ni cache compartidas
  * con otras visitas). Si carga, se queda `dwellMs` en la pagina antes de
- * cerrar el context. Nunca lanza: los errores de navegacion vuelven en
- * `errorMessage`.
+ * cerrar el context. Nunca lanza: los errores de navegacion vuelven
+ * clasificados en `outcome` y con el detalle en `errorMessage`.
  */
 export async function visitUrl(
   browser: Browser,
   url: string,
-  { dwellMs = 0, blockResources = false }: VisitOptions = {}
+  { dwellMs = 0, blockResources = false, timeoutMs = config.checker.timeoutMs }: VisitOptions = {}
 ): Promise<VisitResult> {
-  const context = await browser.newContext();
   const startedAt = Date.now();
+  let context;
+  try {
+    context = await browser.newContext();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      httpStatus: null,
+      ok: false,
+      outcome: "error_interno",
+      responseTimeMs: Date.now() - startedAt,
+      finalUrl: null,
+      redirects: 0,
+      errorMessage: message,
+    };
+  }
 
   try {
     if (blockResources) {
@@ -88,47 +95,42 @@ export async function visitUrl(
     }
 
     const page = await context.newPage();
-    const response = await page.goto(url, {
-      timeout: config.checker.timeoutMs,
-      waitUntil: "domcontentloaded",
-    });
+    const response = await page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
 
     const httpStatus = response?.status() ?? null;
     const ok = response !== null && response.ok();
     // Se mide antes de la espera: es el tiempo de carga, no el de la sesion.
     const responseTimeMs = Date.now() - startedAt;
 
+    let redirects = 0;
+    for (let req = response?.request().redirectedFrom(); req; req = req.redirectedFrom()) {
+      redirects++;
+    }
+    const finalUrl = page.url() !== url ? page.url() : null;
+    const hasContent = ok ? await pageHasContent(page) : null;
+    const outcome = classifyResponse(httpStatus, hasContent);
+
     if (dwellMs > 0) {
       await page.waitForTimeout(dwellMs);
     }
 
-    return {
-      httpStatus,
-      ok,
-      responseTimeMs,
-      errorMessage: ok ? null : `HTTP ${httpStatus ?? "sin respuesta"}`,
-    };
+    let errorMessage: string | null = null;
+    if (!ok) errorMessage = `HTTP ${httpStatus ?? "sin respuesta"}`;
+    else if (outcome === "indeterminado") errorMessage = "La pagina respondio pero no se pudo confirmar contenido en el DOM";
+
+    return { httpStatus, ok, outcome, responseTimeMs, finalUrl, redirects, errorMessage };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     return {
       httpStatus: null,
       ok: false,
+      outcome: classifyError(message),
       responseTimeMs: Date.now() - startedAt,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      finalUrl: null,
+      redirects: 0,
+      errorMessage: message,
     };
   } finally {
-    await context.close();
+    await context.close().catch(() => undefined);
   }
-}
-
-async function checkOne(
-  browser: Browser,
-  target: LinkCheckTarget
-): Promise<LinkCheckResult> {
-  const visit = await visitUrl(browser, target.link);
-  return {
-    smsContentId: target.smsContentId,
-    link: target.link,
-    checkedAt: new Date(),
-    ...visit,
-  };
 }

@@ -1,2 +1,6 @@
+.env
 dumps/
 clicks_to_do.txt
+docker/mock-api/
+node_modules/
+dist/

@@ -14,8 +14,14 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      mock-api:
+      # Solo con el profile "mock" (COMPOSE_PROFILES=mock en .env). Contra la
+      # API EDR real no se levanta y la app no lo necesita.
+      mock-edr:
         condition: service_started
+        required: false
+    # Al apagar, el worker devuelve a la cola lo que no empezo y espera las
+    # visitas abiertas (hasta LINK_CHECK_TIMEOUT_MS).
+    stop_grace_period: 30s
     restart: unless-stopped
 
   mysql:
@@ -50,15 +56,21 @@ services:
     stdin_open: true
     tty: true
 
-  mock-api:
-    image: nginx:1.27-alpine
-    container_name: click-master-mock-api
+  mock-edr:
+    image: node:20-alpine
+    container_name: click-master-mock-edr
+    profiles: ["mock"]
+    command: ["node", "/srv/server.js"]
+    environment:
+      MOCK_EDR_PER_MINUTE: ${MOCK_EDR_PER_MINUTE:-10}
+      MOCK_EDR_MAX_ROWS: ${MOCK_EDR_MAX_ROWS:-20000}
+      MOCK_EDR_AUTH: ${MOCK_EDR_AUTH:-}
     ports:
-      - "127.0.0.1:${MOCK_API_HOST_PORT:-8080}:80"
+      - "127.0.0.1:${MOCK_API_HOST_PORT:-8080}:8080"
     networks:
       - frontend
     volumes:
-      - ./docker/mock-api:/usr/share/nginx/html:ro
+      - ./docker/mock-edr:/srv:ro
     restart: unless-stopped
 
 networks:

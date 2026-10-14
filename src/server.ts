@@ -1,158 +1,54 @@
-import express from "express";
-import { z } from "zod";
 import { config } from "./config";
-import { assertDbConnection } from "./db/pool";
+import { errorMessage, log } from "./logger";
+import { assertDbConnection, pool } from "./db/pool";
 import { ensureSchema } from "./db/schema";
-import { runSync } from "./service/syncService";
-import {
-  getClickJob,
-  getCurrentClickJob,
-  isClickJobRunning,
-  listClickJobs,
-  listQueuedClickJobs,
-  cancelCurrentClickJob,
-  startClickBatch,
-  startClickJob,
-} from "./clicker/clickJob";
-import { parseClickList } from "./clicker/parseClickList";
-
-const app = express();
-app.use(express.json());
-
-// Estado simple en memoria para no correr dos syncs pisandose.
-let syncInProgress = false;
-
-app.get("/health", async (_req, res) => {
-  try {
-    await assertDbConnection();
-    res.json({ status: "ok" });
-  } catch (err) {
-    res.status(503).json({ status: "db_unreachable", error: String(err) });
-  }
-});
-
-app.post("/sync", async (_req, res) => {
-  if (syncInProgress) {
-    res.status(409).json({ error: "Ya hay un sync en curso" });
-    return;
-  }
-  // Sync y jobs de clicks no se pisan: los dos levantan Chromium y el
-  // container tiene memoria limitada.
-  if (isClickJobRunning()) {
-    res.status(409).json({ error: "Hay un job de clicks en curso" });
-    return;
-  }
-
-  syncInProgress = true;
-  try {
-    const summary = await runSync();
-    res.json({ status: "ok", ...summary });
-  } catch (err) {
-    console.error("Error en /sync:", err);
-    res.status(500).json({ status: "error", error: String(err) });
-  } finally {
-    syncInProgress = false;
-  }
-});
-
-const clickJobRequestSchema = z.object({
-  url: z
-    .string()
-    .url()
-    .refine((u) => /^https?:\/\//i.test(u), "La url tiene que ser http(s)"),
-  count: z.number().int().min(1).max(config.clicker.maxCount),
-});
-
-// Lanza un job que abre `url` `count` veces. Responde enseguida (202);
-// el progreso se consulta con GET /clicks o GET /clicks/:id.
-app.post("/clicks", (req, res) => {
-  const parsed = clickJobRequestSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({
-      error: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
-    });
-    return;
-  }
-  if (isClickJobRunning()) {
-    res.status(409).json({ error: "Ya hay un job de clicks en curso" });
-    return;
-  }
-  if (syncInProgress) {
-    res.status(409).json({ error: "Hay un sync en curso" });
-    return;
-  }
-
-  const job = startClickJob(parsed.data.url, parsed.data.count);
-  res.status(202).json(job);
-});
-
-// Lanza un job por linea de un archivo tipo clicks_to_do.txt (`url,cantidad`
-// por linea), mandado como text/plain. Corren de a uno, en orden. Si alguna
-// linea es invalida responde 400 con todos los errores y no encola nada.
-app.post("/clicks/batch", express.text({ type: "*/*", limit: "1mb" }), (req, res) => {
-  const parsed = parseClickList(typeof req.body === "string" ? req.body : "");
-  if (!parsed.ok) {
-    res.status(400).json({ error: "Archivo invalido", details: parsed.errors });
-    return;
-  }
-  if (isClickJobRunning()) {
-    res.status(409).json({ error: "Ya hay un job de clicks en curso" });
-    return;
-  }
-  if (syncInProgress) {
-    res.status(409).json({ error: "Hay un sync en curso" });
-    return;
-  }
-
-  const jobs = startClickBatch(parsed.items);
-  res.status(202).json({
-    batchId: jobs[0].batch?.id,
-    jobs: jobs.length,
-    totalVisits: jobs.reduce((sum, job) => sum + job.total, 0),
-    items: jobs.map((job) => ({ id: job.id, url: job.url, count: job.total })),
-  });
-});
-
-app.get("/clicks", (_req, res) => {
-  res.json({
-    current: getCurrentClickJob(),
-    queued: listQueuedClickJobs(),
-    syncInProgress,
-    jobs: listClickJobs(),
-  });
-});
-
-// Cancela el job en curso y los que esperan en cola: no se lanzan visitas
-// nuevas y las abiertas terminan su sesion. Se puede lanzar otro cuando
-// `current` sea null.
-app.post("/clicks/cancel", (_req, res) => {
-  const cancelled = cancelCurrentClickJob();
-  if (!cancelled) {
-    res.status(404).json({ error: "No hay ningun job de clicks corriendo" });
-    return;
-  }
-  res.json({ ...cancelled.job, cancelledQueued: cancelled.cancelledQueued });
-});
-
-app.get("/clicks/:id", (req, res) => {
-  const job = getClickJob(req.params.id);
-  if (!job) {
-    res.status(404).json({ error: "Job no encontrado" });
-    return;
-  }
-  res.json(job);
-});
+import { createApp } from "./http/app";
+import { Scheduler } from "./service/scheduler";
+import { processingWorker } from "./worker/processingWorker";
 
 async function main() {
   await assertDbConnection();
   await ensureSchema();
 
-  app.listen(config.port, () => {
-    console.log(`sms-link-checker escuchando en :${config.port}`);
+  const server = createApp().listen(config.port, () => {
+    log.info("http: escuchando", { port: config.port });
   });
+
+  // Ingesta (scheduler) y verificacion (worker) arrancan solos y van
+  // desacoplados: la ingesta llena la cola y el worker la drena a su ritmo.
+  const scheduler = new Scheduler(() => processingWorker.wake());
+  if (config.scheduler.enabled) scheduler.start();
+  else log.warn("scheduler: deshabilitado (SCHEDULER_ENABLED=false)");
+  if (config.worker.enabled) await processingWorker.start();
+  else log.warn("worker: deshabilitado (WORKER_ENABLED=false)");
+
+  // docker stop manda SIGTERM: se devuelven a la cola los trabajos sin
+  // empezar y se espera a las visitas abiertas (stop_grace_period en compose).
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info("app: apagando", { signal });
+    server.close();
+    try {
+      await scheduler.stop();
+      await processingWorker.stop();
+      await pool.end();
+    } catch (err) {
+      log.error("app: error en el apagado", { error: errorMessage(err) });
+    }
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  // Playwright a veces deja promesas internas rechazadas cuando se cae un
+  // target: se loguean en vez de tirar abajo el proceso y todas las visitas.
+  process.on("unhandledRejection", (reason) => {
+    log.error("app: promesa rechazada sin manejar", { error: errorMessage(reason) });
+  });
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 }
 
 main().catch((err) => {
-  console.error("No se pudo levantar el servidor:", err);
+  log.error("app: no se pudo levantar el servidor", { error: errorMessage(err) });
   process.exit(1);
 });

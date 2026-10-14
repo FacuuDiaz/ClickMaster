@@ -1,6 +1,7 @@
 // Resumen del progreso de clicks (make clicks-summary). Corre con el Node
 // del container de la app, leido por stdin: no hace falta rebuildear.
-fetch("http://localhost:3000/clicks")
+const headers = process.env.ADMIN_TOKEN ? { Authorization: `Bearer ${process.env.ADMIN_TOKEN}` } : {};
+fetch("http://localhost:3000/clicks", { headers })
   .then((r) => r.json())
   .then((d) => {
     const c = d.current;

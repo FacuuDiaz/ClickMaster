@@ -1,8 +1,9 @@
 import { randomUUID } from "crypto";
-import { chromium } from "playwright";
 import pLimit from "p-limit";
 import { config } from "../config";
-import { visitUrl } from "../checker/linkChecker";
+import { launchBrowser, visitUrl } from "../checker/linkChecker";
+import { processingWorker } from "../worker/processingWorker";
+import { log, errorMessage } from "../logger";
 
 export type ClickJobStatus = "queued" | "running" | "cancelling" | "cancelled" | "done" | "failed";
 
@@ -67,10 +68,12 @@ function addToHistory(job: ClickJob): void {
  * sacaron de la cola.
  */
 export function cancelCurrentClickJob(): { job: ClickJob; cancelledQueued: number } | null {
-  if (!current) return null;
-  if (current.status === "running") {
+  // Mientras se espera que el worker suelte Chromium hay cola pero no "current".
+  const target = current ?? queue[0];
+  if (!target) return null;
+  if (current && current.status === "running") {
     current.status = "cancelling";
-    console.log(`[clicks ${current.id}] cancelacion pedida en ${current.completed}/${current.total}`);
+    log.info("clicks: cancelacion pedida", { clickJobId: current.id, completed: current.completed, total: current.total });
   }
 
   const dropped = queue.splice(0);
@@ -80,10 +83,10 @@ export function cancelCurrentClickJob(): { job: ClickJob; cancelledQueued: numbe
     addToHistory(job);
   }
   if (dropped.length > 0) {
-    console.log(`[clicks] ${dropped.length} jobs en cola cancelados`);
+    log.info("clicks: jobs en cola cancelados", { cancelled: dropped.length });
   }
 
-  return { job: current, cancelledQueued: dropped.length };
+  return { job: target, cancelledQueued: dropped.length };
 }
 
 function randomDwellMs(): number {
@@ -136,13 +139,27 @@ function enqueue(items: { url: string; count: number }[], batchId: string | null
 
   queue.push(...created);
   if (batchId) {
-    console.log(`[clicks] lote ${batchId}: ${created.length} jobs encolados`);
+    log.info("clicks: lote encolado", { batchId, jobs: created.length });
   }
   void drainQueue();
   return created;
 }
 
 async function drainQueue(): Promise<void> {
+  // Los clicks manuales tienen prioridad sobre la cola automatica: el
+  // worker deja de reclamar, devuelve lo que tenia sin empezar, espera sus
+  // visitas abiertas y cierra su Chromium. Asi nunca hay dos navegadores
+  // compitiendo por los 2 GB del container. Mientras tanto la cola sigue
+  // con jobs, asi que isClickJobRunning() ya da true.
+  await processingWorker.pause("clicks manuales");
+  try {
+    await drainClickJobs();
+  } finally {
+    processingWorker.resume();
+  }
+}
+
+async function drainClickJobs(): Promise<void> {
   // Sin awaits entre que termina un job y arranca el siguiente:
   // isClickJobRunning() nunca ve un hueco en el medio.
   for (let job = queue.shift(); job; job = queue.shift()) {
@@ -150,8 +167,7 @@ async function drainQueue(): Promise<void> {
     job.startedAt = new Date();
     addToHistory(job);
     current = job;
-    const step = job.batch ? ` (lote ${job.batch.index}/${job.batch.size})` : "";
-    console.log(`[clicks ${job.id}] inicio${step}: ${job.total} visitas a ${job.url}`);
+    log.info("clicks: inicio", { clickJobId: job.id, url: job.url, total: job.total, batch: job.batch });
 
     try {
       await runClickJob(job);
@@ -160,21 +176,25 @@ async function drainQueue(): Promise<void> {
       const status = job.status as ClickJobStatus;
       job.status = status === "cancelling" ? "cancelled" : "done";
     } catch (err) {
-      console.error(`Error en el job de clicks ${job.id}:`, err);
       job.status = "failed";
-      job.lastError = err instanceof Error ? err.message : String(err);
+      job.lastError = errorMessage(err);
+      log.error("clicks: error en el job", { clickJobId: job.id, error: job.lastError });
     } finally {
       job.finishedAt = new Date();
       current = null;
-      console.log(
-        `[clicks ${job.id}] fin (${job.status}): ${job.ok} ok, ${job.failed} fallos de ${job.total}`
-      );
+      log.info("clicks: fin", {
+        clickJobId: job.id,
+        status: job.status,
+        ok: job.ok,
+        failed: job.failed,
+        total: job.total,
+      });
     }
   }
 }
 
 async function runClickJob(job: ClickJob): Promise<void> {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchBrowser();
   const limit = pLimit(config.checker.concurrency);
 
   try {
@@ -194,10 +214,14 @@ async function runClickJob(job: ClickJob): Promise<void> {
             job.failed++;
             job.lastError = visit.errorMessage;
           }
-          console.log(
-            `[clicks ${job.id}] ${job.completed}/${job.total} ` +
-              (visit.ok ? `ok (HTTP ${visit.httpStatus})` : `fallo: ${visit.errorMessage?.split("\n")[0]}`)
-          );
+          log.info("clicks: visita", {
+            clickJobId: job.id,
+            progress: `${job.completed}/${job.total}`,
+            ok: visit.ok,
+            httpStatus: visit.httpStatus,
+            outcome: visit.outcome,
+            error: visit.ok ? undefined : visit.errorMessage?.split("\n")[0],
+          });
         })
       )
     );

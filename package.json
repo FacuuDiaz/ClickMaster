@@ -2,13 +2,15 @@
   "name": "sms-link-checker",
   "version": "1.0.0",
   "private": true,
-  "description": "Fetchea CDRs de SMS desde una API, los carga en sms_content (MariaDB) y verifica en paralelo con Playwright los links embebidos en el campo text.",
+  "description": "Ingesta automatica de SMS EDR (JSON-RPC) en sms_content y verificacion de sus links con Playwright desde una cola persistente en MySQL.",
   "type": "commonjs",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
-    "sync:once": "tsx src/cli.ts"
+    "sync:once": "tsx src/cli.ts",
+    "test": "node --import tsx --test --test-concurrency=1 test/unit/*.test.ts test/integration/*.test.ts",
+    "test:volume": "node --import tsx --test --test-concurrency=1 test/volume/*.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
