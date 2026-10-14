@@ -2,7 +2,6 @@
 # `make help` lista los comandos.
 
 COMPOSE      := docker compose
-COMPOSE_PROD := docker compose -f docker-compose.prod.yml
 NODE_IMAGE   := node:20-bookworm-slim
 # Corre npm dentro de un container, con tu usuario para que los archivos no queden como root
 NODE_RUN     := docker run --rm -u $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR):/app -w /app $(NODE_IMAGE)
@@ -12,7 +11,7 @@ APP_PORT ?= 3000
 
 .DEFAULT_GOAL := help
 .PHONY: help env lock setup up down restart build logs ps sync sync-once health \
-        clicks clicks-file clicks-status clicks-cancel db-shell db-checks clean prod-up prod-down prod-logs prod-sync
+        clicks clicks-file clicks-status clicks-summary clicks-cancel db-shell db-checks clean
 
 help: ## Muestra esta ayuda
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(firstword $(MAKEFILE_LIST)) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -70,6 +69,9 @@ clicks-file: ## Un job por linea (url,cantidad) de un archivo: make clicks-file 
 clicks-status: ## Estado del job de clicks en curso y los ultimos jobs
 	@curl -s http://localhost:$(APP_PORT)/clicks; echo
 
+clicks-summary: ## Progreso resumido de los clicks (job actual, cola y totales)
+	@$(COMPOSE) exec -T app node - < scripts/clicks-summary.js
+
 clicks-cancel: ## Cancela el job de clicks en curso
 	@curl -s -X POST http://localhost:$(APP_PORT)/clicks/cancel; echo
 
@@ -84,16 +86,3 @@ db-checks: ## Muestra los ultimos chequeos de links
 
 clean: ## Baja todo y BORRA los datos de MySQL (volumen)
 	$(COMPOSE) down -v
-
-# ---------- Servidor (solo app, red externa tmob_network) ----------
-
-prod-up: setup ## Levanta la app en el servidor
-	$(COMPOSE_PROD) up -d --build
-
-prod-down: ## Baja la app en el servidor
-	$(COMPOSE_PROD) down
-
-prod-logs: ## Logs de la app en el servidor
-	$(COMPOSE_PROD) logs -f app
-
-prod-sync: sync ## Dispara un sync en el servidor

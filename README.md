@@ -32,16 +32,6 @@ make down        # baja todo (clean = baja y borra los datos de MySQL)
 - `make lock` regenera `package-lock.json` dentro de un container de Node
   (correrlo cada vez que se toque `package.json`).
 
-### Servidor
-
-Usa `docker-compose.prod.yml`: solo la app, conectada a la red externa
-`tmob_network` donde ya está la base.
-
-1. Copiar el repo (con `package-lock.json`) y crear `.env` con `DB_HOST` =
-   nombre del container de la base, credenciales reales y `API_URL`/`API_TOKEN` reales.
-2. `make prod-up`
-3. `make health` / `make prod-sync` / `make prod-logs`
-
 El puerto queda en `127.0.0.1:3000` a propósito (`/sync` no tiene auth).
 
 ## Muestreo de clicks

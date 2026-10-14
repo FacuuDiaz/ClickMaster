@@ -1,16 +1,16 @@
-# Entorno LOCAL completo: app + MySQL 8 + API mock.
-# Todo corre en containers, no hace falta instalar nada nativo (usar `make up`).
-# Para el servidor ver docker-compose.prod.yml.
 services:
   app:
     build: .
     container_name: click-master
     ports:
-      - "${APP_PORT:-3000}:3000"
-    shm_size: "1gb" # Chromium headless necesita mas de los 64MB que da Docker por default
+      - "127.0.0.1:${APP_PORT:-3000}:3000"   # solo localhost; exponer vía reverse proxy si hace falta
+    shm_size: "1gb"
     mem_limit: 2g
     env_file:
       - .env
+    networks:
+      - backend    # para hablar con mysql
+      - frontend   # para salir a internet (si la app lo necesita)
     depends_on:
       mysql:
         condition: service_healthy
@@ -27,8 +27,9 @@ services:
       MYSQL_USER: ${DB_USER}
       MYSQL_PASSWORD: ${DB_PASSWORD}
       TZ: UTC
-    ports:
-      - "${MYSQL_HOST_PORT:-3307}:3306" # 3307 en el host para no chocar con otro MySQL local
+    # SIN "ports:" -> no se expone al host ni a internet
+    networks:
+      - backend
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -39,17 +40,31 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # API falsa que devuelve un JSON de CDRs de ejemplo (docker/mock-api/cdrs.json)
-  # y sirve paginas para que los links tengan algo que chequear.
-  # Para usar la API real, cambiar API_URL en .env.
+  mysql-tools:
+    build:
+      context: .
+      dockerfile: Dockerfile.mysql
+    container_name: click-master-mysql-tools
+    networks:
+      - backend
+    stdin_open: true
+    tty: true
+
   mock-api:
     image: nginx:1.27-alpine
     container_name: click-master-mock-api
     ports:
-      - "${MOCK_API_HOST_PORT:-8080}:80"
+      - "127.0.0.1:${MOCK_API_HOST_PORT:-8080}:80"
+    networks:
+      - frontend
     volumes:
       - ./docker/mock-api:/usr/share/nginx/html:ro
     restart: unless-stopped
+
+networks:
+  backend:
+    internal: true   # sin salida a internet ni entrada desde afuera
+  frontend:
 
 volumes:
   mysql_data:

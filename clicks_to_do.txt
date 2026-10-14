@@ -1,5 +1,0 @@
-# Un job de clicks por linea: url,cantidad
-# Las lineas vacias y las que empiezan con # se ignoran.
-# Corren de a uno, en este orden. Lanzar con: make clicks-file
-http://mock-api/ok.html?campania=a,3
-http://mock-api/ok.html?campania=b,2
