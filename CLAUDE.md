@@ -9,11 +9,12 @@ Servicio Node 20 + TypeScript (Express, Playwright 1.48, mysql2, zod, p-limit) q
 4. **Worker** (`worker/processingWorker.ts`): reclama de `sms_processing` con `FOR UPDATE SKIP LOCKED` + `FORCE INDEX (idx_next_attempt)` (`db/processingRepo.ts`), con reservas `locked_by`/`locked_until`. Visita con `checker/linkChecker.ts` (un Chromium compartido) y guarda cada intento en `sms_link_checks` apenas termina. Clasificación y política de reintentos en `checker/classifyVisit.ts`.
 5. **Clicks manuales** (`clicker/clickJob.ts`): pausan el worker (`processingWorker.pause/resume`) para que nunca haya dos Chromium abiertos. Su estado sigue en memoria.
 6. **HTTP**: `http/app.ts` (sync, recover, clicks) + `http/reportsRoutes.ts` / `db/reportsRepo.ts` (reportes paginados por keyset). `server.ts` arranca todo y hace el apagado ordenado con SIGTERM.
+7. **Dashboard**: `public/` (HTML + JS sin dependencias, graficos SVG a mano) servido en `/` sin token; datos en `http/dashboardRoutes.ts` (`/dashboard/data|checks|sms`, cache con single-flight) → `db/dashboardRepo.ts`. Todo por `db/reportsPool.ts`: pool aparte de 2 conexiones, READ ONLY, `MAX_EXECUTION_TIME`. Las consultas del dashboard nunca usan el pool de la app.
 
 ## Tablas
 - `sms_content`: producción. **Nunca alterarla** (ni índices ni UNIQUE). `schema.test.ts` lo verifica.
 - `sms_processing`: identidad (UNIQUE `client_message_id, vendor_message_id`) + cola. Estados: pending, processing, retry, success, failed, skipped. `next_attempt_at` solo tiene valor en pending/retry.
-- `sms_link_checks`: un registro por intento. Se migra con ALTERs aditivos si faltan columnas.
+- `sms_link_checks`: un registro por intento. Se migra con ALTERs aditivos si faltan columnas/indices (`idx_checked_outcome` cubre los graficos del dashboard).
 - `sync_runs`: una fila por ventana ingerida.
 
 ## Restricciones

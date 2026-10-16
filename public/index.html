@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Declara que la pagina ya soporta claro/oscuro: asi Chrome no le aplica su
+     modo oscuro forzado, que invierte las columnas grandes de los graficos. -->
+<meta name="color-scheme" content="light dark">
+<!-- Dark Reader y similares reescriben los colores de los graficos; la pagina
+     ya trae su propio modo oscuro validado. -->
+<meta name="darkreader-lock">
+<title>ClickMaster · Reportes</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --wash: rgba(11, 11, 11, 0.04);
+    --accent: #2a78d6;
+    --s1: #2a78d6; /* cargada */
+    --s2: #eb6834; /* error del sitio */
+    --s3: #1baf7a; /* indeterminado */
+    --s4: #eda100; /* error tecnico */
+    --good: #006300;
+    --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --wash: rgba(255, 255, 255, 0.05);
+      --accent: #3987e5;
+      --s1: #3987e5;
+      --s2: #d95926;
+      --s3: #199e70;
+      --s4: #c98500;
+      --good: #0ca30c;
+      --critical: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --wash: rgba(255, 255, 255, 0.05);
+    --accent: #3987e5;
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --s4: #c98500;
+    --good: #0ca30c;
+    --critical: #e66767;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin-bottom: 20px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; }
+  h1 small { font-weight: 400; color: var(--text-secondary); font-size: 14px; margin-left: 6px; }
+  .meta { color: var(--text-muted); font-size: 13px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .meta label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+
+  /* Filtros: una fila arriba de todo lo que scopean */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 20px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+  .seg button { border: 0; background: none; color: var(--text-secondary); padding: 7px 12px; font: inherit; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button:hover { background: var(--wash); }
+  .seg button[aria-pressed="true"] { color: var(--text-primary); font-weight: 600; background: var(--wash); }
+  .custom { display: none; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .custom.show { display: inline-flex; }
+  input, select, .btn {
+    font: inherit; color: var(--text-primary); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+  }
+  .btn { cursor: pointer; }
+  .btn:hover:not(:disabled) { background: var(--wash); }
+  .btn:disabled { color: var(--text-muted); cursor: default; }
+  .range-label { color: var(--text-muted); font-size: 13px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .grid-kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .kpi .label { color: var(--text-secondary); font-size: 13px; }
+  .kpi .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .kpi .sub { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+  .kpi.hero .value { font-size: 48px; line-height: 1.05; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .status-row { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 8px; }
+  .status-row div { font-size: 13px; color: var(--text-secondary); }
+  .status-row b { color: var(--text-primary); font-size: 18px; font-weight: 600; margin-right: 4px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+  .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  .pill.ok::before { background: var(--good); }
+  .pill.bad::before { background: var(--critical); }
+  .pill.ok { color: var(--good); }
+  .pill.bad { color: var(--critical); }
+
+  .charts { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 12px; }
+  .charts .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .chart-card h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .chart-card .desc { color: var(--text-muted); font-size: 12px; margin: 2px 0 8px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 8px; padding: 0; list-style: none; font-size: 13px; color: var(--text-secondary); }
+  .legend li { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .chart { position: relative; width: 100%; }
+  .chart svg { display: block; width: 100%; overflow: visible; }
+  .chart svg:focus { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+  .loading .chart, .loading .grid-kpi, .loading .row2, .loading .tbl-wrap { opacity: 0.55; transition: opacity .15s; }
+  .tick { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .tooltip {
+    position: absolute; pointer-events: none; z-index: 5; min-width: 150px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.12); padding: 8px 10px; font-size: 12px; display: none;
+  }
+  .tooltip .tt-title { color: var(--text-muted); margin-bottom: 4px; }
+  .tooltip .tt-row { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .tooltip .tt-row b { font-variant-numeric: tabular-nums; min-width: 42px; text-align: right; }
+  .tooltip .tt-row span { color: var(--text-secondary); }
+  .tooltip .key { width: 12px; height: 2px; border-radius: 1px; display: inline-block; }
+  details.data { margin-top: 6px; font-size: 13px; }
+  details.data summary { color: var(--text-secondary); cursor: pointer; }
+  details.data .scroll { max-height: 240px; overflow: auto; margin-top: 6px; }
+  .empty { color: var(--text-muted); font-size: 13px; padding: 24px 0; text-align: center; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: -4px -4px 12px; }
+  .tabs button { border: 0; background: none; font: inherit; color: var(--text-secondary); padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs button[aria-selected="true"] { color: var(--text-primary); font-weight: 600; border-bottom-color: var(--accent); }
+  .tbl-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { color: var(--text-muted); font-weight: 500; white-space: nowrap; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+  td.link { max-width: 340px; overflow-wrap: anywhere; }
+  td.text { max-width: 420px; overflow-wrap: anywhere; color: var(--text-secondary); }
+  .tag { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .tag i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .err { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+  .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; color: var(--text-muted); font-size: 13px; }
+  .banner { display: none; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }
+  .banner.show { display: block; }
+  .banner.error { border-color: var(--critical); }
+  .token-form { display: none; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .token-form.show { display: flex; }
+
+  @media (max-width: 860px) {
+    .row2, .charts .pair { grid-template-columns: 1fr; }
+    .kpi.hero .value { font-size: 40px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <header>
+    <h1>ClickMaster <small>verificacion de links de SMS</small></h1>
+    <div class="meta">
+      <span id="updated">—</span>
+      <label><input type="checkbox" id="auto" checked> Actualizar cada 30 s</label>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" role="status">
+    <span id="banner-text"></span>
+    <form class="token-form" id="token-form">
+      <input type="password" id="token" placeholder="ADMIN_TOKEN" autocomplete="off" aria-label="Token de administrador">
+      <button class="btn" type="submit">Entrar</button>
+    </form>
+  </div>
+
+  <div class="filters" role="group" aria-label="Rango de tiempo">
+    <div class="seg" id="presets">
+      <button type="button" data-preset="30m" aria-pressed="true">30 min</button>
+      <button type="button" data-preset="1h" aria-pressed="false">1 h</button>
+      <button type="button" data-preset="6h" aria-pressed="false">6 h</button>
+      <button type="button" data-preset="24h" aria-pressed="false">24 h</button>
+      <button type="button" data-preset="7d" aria-pressed="false">7 dias</button>
+      <button type="button" data-preset="custom" aria-pressed="false">Personalizado</button>
+    </div>
+    <form class="custom" id="custom">
+      <input type="datetime-local" id="from" aria-label="Desde" required>
+      <span class="range-label">a</span>
+      <input type="datetime-local" id="to" aria-label="Hasta" required>
+      <button class="btn" type="submit">Aplicar</button>
+    </form>
+    <span class="range-label" id="range-label"></span>
+  </div>
+
+  <section class="grid-kpi" aria-label="Resumen del rango">
+    <div class="card kpi hero"><div class="label">Paginas cargadas</div><div class="value" id="k-rate">—</div><div class="sub" id="k-rate-sub">del total de verificaciones</div></div>
+    <div class="card kpi"><div class="label">Verificaciones</div><div class="value" id="k-checks">—</div><div class="sub">intentos en el rango</div></div>
+    <div class="card kpi"><div class="label">Error del sitio</div><div class="value" id="k-sitio">—</div><div class="sub">4xx, 5xx, certificado…</div></div>
+    <div class="card kpi"><div class="label">Error tecnico</div><div class="value" id="k-tecnico">—</div><div class="sub">timeout, DNS, conexion…</div></div>
+    <div class="card kpi"><div class="label">Tiempo de carga</div><div class="value" id="k-load">—</div><div class="sub">promedio de las cargadas</div></div>
+    <div class="card kpi"><div class="label">SMS ingestados</div><div class="value" id="k-sms">—</div><div class="sub">entraron a la cola en el rango</div></div>
+  </section>
+
+  <section class="row2">
+    <div class="card">
+      <div class="kpi"><div class="label">Cola ahora</div></div>
+      <div class="status-row">
+        <div><b id="q-pending">—</b>pendientes</div>
+        <div><b id="q-processing">—</b>en proceso</div>
+        <div><b id="q-retry">—</b>para reintentar</div>
+        <div><b id="q-lag">—</b>de atraso</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="kpi"><div class="label">Ultima ingesta de Alaris</div></div>
+      <div class="status-row">
+        <div><span class="pill" id="r-status">—</span></div>
+        <div id="r-window"></div>
+        <div><b id="r-records">—</b>SMS recibidos</div>
+      </div>
+      <div class="err" id="r-error"></div>
+    </div>
+  </section>
+
+  <section class="charts">
+    <div class="card chart-card">
+      <h2>Verificaciones por resultado</h2>
+      <p class="desc" id="c1-desc">Intentos de Playwright por intervalo</p>
+      <ul class="legend" id="legend-checks"></ul>
+      <div class="chart" id="chart-checks"></div>
+      <details class="data"><summary>Ver datos en tabla</summary><div class="scroll" id="table-checks"></div></details>
+    </div>
+    <div class="pair">
+      <div class="card chart-card">
+        <h2>SMS ingestados</h2>
+        <p class="desc">SMS que entraron a la cola por intervalo</p>
+        <div class="chart" id="chart-ingest"></div>
+        <details class="data"><summary>Ver datos en tabla</summary><div class="scroll" id="table-ingest"></div></details>
+      </div>
+      <div class="card chart-card">
+        <h2>Tiempo de carga promedio</h2>
+        <p class="desc">Solo paginas que cargaron, en milisegundos</p>
+        <div class="chart" id="chart-load"></div>
+        <details class="data"><summary>Ver datos en tabla</summary><div class="scroll" id="table-load"></div></details>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="checks" aria-selected="true">Links verificados</button>
+      <button type="button" role="tab" data-tab="sms" aria-selected="false">SMS procesados</button>
+    </div>
+    <div class="tbl-tools">
+      <select id="tbl-filter" aria-label="Filtrar"></select>
+      <span class="range-label" id="tbl-info"></span>
+    </div>
+    <div class="tbl-wrap" id="tbl"></div>
+    <div class="pager">
+      <span id="page-label">Pagina 1</span>
+      <button class="btn" type="button" id="prev" disabled>Anterior</button>
+      <button class="btn" type="button" id="next" disabled>Siguiente</button>
+    </div>
+  </section>
+</div>
+<script src="dashboard.js"></script>
+</body>
+</html>

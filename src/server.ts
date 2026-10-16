@@ -1,6 +1,7 @@
 import { config } from "./config";
 import { errorMessage, log } from "./logger";
 import { assertDbConnection, pool } from "./db/pool";
+import { reportsPool } from "./db/reportsPool";
 import { ensureSchema } from "./db/schema";
 import { createApp } from "./http/app";
 import { Scheduler } from "./service/scheduler";
@@ -34,6 +35,7 @@ async function main() {
       await scheduler.stop();
       await processingWorker.stop();
       await pool.end();
+      await reportsPool.end();
     } catch (err) {
       log.error("app: error en el apagado", { error: errorMessage(err) });
     }

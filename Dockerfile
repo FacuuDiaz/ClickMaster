@@ -11,6 +11,8 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
+# Dashboard estatico (lo sirve Express desde /app/public)
+COPY public ./public
 
 ENV NODE_ENV=production
 EXPOSE 3000

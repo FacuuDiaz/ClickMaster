@@ -1,3 +1,4 @@
+import path from "path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
 import { config } from "../config";
@@ -18,6 +19,10 @@ import {
 } from "../clicker/clickJob";
 import { parseClickList } from "../clicker/parseClickList";
 import { reportsRouter } from "./reportsRoutes";
+import { dashboardRouter } from "./dashboardRoutes";
+
+// public/ queda al lado de dist/ y de src/ (dist/http/app.js -> /app/public).
+const PUBLIC_DIR = path.resolve(__dirname, "../../public");
 
 /**
  * Si ADMIN_TOKEN esta seteado, todo salvo /health pide Bearer. La app
@@ -55,6 +60,9 @@ const clickJobRequestSchema = z.object({
 export function createApp() {
   const app = express();
   app.use(express.json());
+  // El dashboard (HTML/JS) no tiene datos: se sirve sin token. Los datos los
+  // pide a /dashboard/*, que si pasa por requireAdminToken.
+  app.use(express.static(PUBLIC_DIR, { index: "index.html", maxAge: "5m" }));
   app.use(requireAdminToken);
 
   app.get("/health", async (_req, res) => {
@@ -121,6 +129,7 @@ export function createApp() {
   });
 
   app.use(reportsRouter);
+  app.use(dashboardRouter);
 
   // Lanza un job que abre `url` `count` veces. Responde enseguida (202);
   // el progreso se consulta con GET /clicks o GET /clicks/:id. Pausa la

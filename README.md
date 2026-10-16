@@ -67,6 +67,43 @@ verdad y ajustar `EDR_HTTP_TIMEOUT_MS` con margen.
 `EDR_START_DATE` define la primera ventana cuando la base no tiene corridas;
 si está vacío arranca por la última ventana cerrada (no hace backfill).
 
+## Dashboard
+
+`http://localhost:3000/` (en el servidor, por túnel SSH:
+`ssh -L 3000:localhost:3000 usuario@servidor` y abrir
+`http://localhost:3000/` en tu navegador).
+
+- **Rango:** última media hora por defecto; 1 h, 6 h, 24 h, 7 días o un
+  rango personalizado (hasta `REPORTS_MAX_RANGE_DAYS`). Los rangos
+  relativos se actualizan solos cada 30 s mientras la pestaña está visible.
+- **Indicadores del rango:** % de páginas cargadas, verificaciones, errores
+  del sitio, errores técnicos, tiempo de carga promedio y SMS ingestados.
+  También muestra la cola en este momento (pendientes, en proceso,
+  reintentos, atraso) y la última ingesta de Alaris.
+- **Gráficos de evolución:** verificaciones por resultado (los 11 resultados
+  agrupados en cargada / error del sitio / indeterminado / error técnico),
+  SMS ingestados y tiempo de carga promedio. Cada uno tiene tooltip y su
+  tabla de datos.
+- **Listados paginados** (25 por página, los más recientes primero): links
+  verificados, filtrables por resultado, y SMS procesados, filtrables por
+  estado.
+- Si hay `ADMIN_TOKEN`, la página lo pide una vez y lo guarda en la pestaña.
+
+**Para que no afecte a la ingesta ni al worker:**
+
+| Medida | Qué evita |
+|---|---|
+| Pool de MySQL propio (`REPORTS_DB_CONNECTION_LIMIT=2`) con cola acotada | Que muchas pestañas abiertas le saquen conexiones a la app: la ingesta y el worker conservan su pool entero |
+| Sesiones en `READ ONLY` y `READ COMMITTED` | Escrituras accidentales y vistas viejas abiertas; los `SELECT` de InnoDB no bloquean filas |
+| `MAX_EXECUTION_TIME` (`REPORTS_QUERY_TIMEOUT_MS`) | MySQL corta una consulta pesada en vez de dejarla corriendo; el dashboard responde 503 y pide un rango más chico |
+| Caché compartida de 15 s con single-flight | N pestañas o refrescos simultáneos = 1 consulta |
+| Gráficos *index-only* (`idx_checked_outcome`, `idx_created_at`) | Agregar por tiempo sin leer las filas (link, error, texto) |
+| Paginación por keyset (fecha, id), sin `OFFSET` ni `COUNT(*)` | Cada página lee ~25 filas aunque el rango tenga millones |
+| Rango máximo y ≤ 60 intervalos por gráfico | Consultas acotadas y respuestas chicas |
+
+`REPORTS_DB_USER`/`REPORTS_DB_PASSWORD` permiten usar un usuario de MySQL
+de solo lectura para el dashboard (opcional: la sesión igual es `READ ONLY`).
+
 ## Comandos de operación
 
 | Comando | Qué hace |

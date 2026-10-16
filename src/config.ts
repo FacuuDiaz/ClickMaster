@@ -146,6 +146,20 @@ export const config = {
     retentionDays: int("RESULTS_RETENTION_DAYS", 0, 0),
   },
 
+  // Dashboard y reportes: van por un pool propio, chico y de solo lectura,
+  // para que nunca le saquen conexiones ni CPU a la ingesta y al worker.
+  reports: {
+    dbConnectionLimit: int("REPORTS_DB_CONNECTION_LIMIT", 2, 1, 10),
+    // Usuario de solo lectura opcional; si no, el mismo de la app (la sesion
+    // igual se abre en READ ONLY).
+    dbUser: optional("REPORTS_DB_USER"),
+    dbPassword: optional("REPORTS_DB_PASSWORD"),
+    // Limite del lado del servidor por consulta: MySQL la corta si se pasa.
+    queryTimeoutMs: int("REPORTS_QUERY_TIMEOUT_MS", 5000, 500),
+    cacheSeconds: int("REPORTS_CACHE_SECONDS", 15, 0),
+    maxRangeDays: int("REPORTS_MAX_RANGE_DAYS", 31, 1),
+  },
+
   worker: {
     enabled: bool("WORKER_ENABLED", true),
     concurrency: checkConcurrency,

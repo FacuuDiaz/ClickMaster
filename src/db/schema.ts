@@ -74,9 +74,21 @@ const SMS_LINK_CHECKS_COLUMNS: { name: string; ddl: string }[] = [
   { name: "worker_id", ddl: "worker_id VARCHAR(64) NULL" },
 ];
 
-const SMS_LINK_CHECKS_INDEXES: { name: string; ddl: string }[] = [
-  { name: "idx_processing_id", ddl: "ADD KEY idx_processing_id (processing_id)" },
-  { name: "idx_checked_at", ddl: "ADD KEY idx_checked_at (checked_at)" },
+// Indices que se agregan con ALTER si faltan (tablas que pueden venir de
+// una version anterior). Todos sobre tablas auxiliares, nunca sms_content.
+const EXTRA_INDEXES: { table: string; name: string; ddl: string }[] = [
+  { table: "sms_link_checks", name: "idx_processing_id", ddl: "ADD KEY idx_processing_id (processing_id)" },
+  // Listado del dashboard por (checked_at, id) y purga por retencion.
+  { table: "sms_link_checks", name: "idx_checked_at", ddl: "ADD KEY idx_checked_at (checked_at)" },
+  // Cubre los graficos del dashboard: se agregan por tiempo y resultado
+  // leyendo solo el indice, sin tocar las filas (que traen link y error).
+  {
+    table: "sms_link_checks",
+    name: "idx_checked_outcome",
+    ddl: "ADD KEY idx_checked_outcome (checked_at, outcome, response_time_ms)",
+  },
+  // SMS ingestados por tiempo de ingreso (grafico y listado del dashboard).
+  { table: "sms_processing", name: "idx_created_at", ddl: "ADD KEY idx_created_at (created_at)" },
 ];
 
 /**
@@ -184,9 +196,9 @@ export async function ensureSchema(): Promise<void> {
       await pool.query(`ALTER TABLE sms_link_checks ADD COLUMN ${column.ddl}`);
     }
   }
-  for (const index of SMS_LINK_CHECKS_INDEXES) {
-    if (!(await indexExists("sms_link_checks", index.name))) {
-      await pool.query(`ALTER TABLE sms_link_checks ${index.ddl}`);
+  for (const index of EXTRA_INDEXES) {
+    if (!(await indexExists(index.table, index.name))) {
+      await pool.query(`ALTER TABLE ${index.table} ${index.ddl}`);
     }
   }
 }
