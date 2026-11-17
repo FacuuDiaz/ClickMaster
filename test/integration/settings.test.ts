@@ -7,6 +7,7 @@ import { reportsPool } from "../../src/db/reportsPool";
 import { config } from "../../src/config";
 import { createApp } from "../../src/http/app";
 import { settingsStore, SettingsValidationError } from "../../src/settings/store";
+import { SETTINGS, currentValue, readPath, type SettingDef } from "../../src/settings/catalog";
 import { count, resetTables, rows, setupTestDb } from "../helpers/db";
 
 const actor = { name: "tester", ip: "127.0.0.1" };
@@ -121,6 +122,53 @@ describe("settings store", () => {
     assert.equal(config.scheduler.windowMinutes, 15);
     await settingsStore.save({ reset: ["scheduler.windowMinutes"] }, actor);
     assert.equal(config.scheduler.windowMinutes, original);
+  });
+
+  test("cada clave del catalogo se guarda, se aplica, sobrevive a releer y vuelve a .env", async () => {
+    // Textos validos y distintos de los de .env (las reglas cruzadas tambien se cumplen).
+    const TEXT: Record<string, string> = {
+      "edr.url": "http://mock-edr:8081/eapi/",
+      "edr.method": "Enterprise.Otro",
+      "edr.cursorName": "get_sms_edr_v2",
+      "edr.clientProductId": "1300",
+      "edr.country": "Chile",
+      "scheduler.startDate": "2026.11.01 00:00:00",
+      "visitHours.days": "lun-mie",
+      "visitHours.from": "08:00",
+      "visitHours.to": "20:00",
+    };
+    const candidate = (def: SettingDef): unknown => {
+      const now = currentValue(def);
+      if (def.key in TEXT) return TEXT[def.key];
+      if (def.options) return Object.keys(def.options).map((k) => (def.type === "enum" ? k : Number(k))).find((v) => v !== now);
+      if (def.type === "bool") return !now;
+      if (def.type === "json") return { probe: 1 };
+      if (def.type === "int" || def.type === "number") {
+        const n = Number(now);
+        const up = def.type === "int" ? n + 1 : n + 0.5;
+        return def.max === undefined || up <= def.max ? up : n - 1;
+      }
+      throw new Error(`sin valor de prueba para ${def.key} (${def.type})`);
+    };
+
+    for (const def of SETTINGS) {
+      const before = currentValue(def);
+      const value = candidate(def);
+      assert.notDeepEqual(value, before, `${def.key}: el valor de prueba tiene que ser distinto`);
+      await settingsStore.save({ set: { [def.key]: value } }, actor);
+      // Se aplica en todos los campos de config que pisa.
+      for (const path of def.paths) assert.deepEqual(readPath(path), value, `${def.key} -> ${path}`);
+      // Releer de la base (como otra instancia) no lo cambia.
+      await settingsStore.reload();
+      for (const path of def.paths) assert.deepEqual(readPath(path), value, `${def.key} despues de releer`);
+      const view = settingsStore.list().settings.find((x) => x.key === def.key);
+      assert.equal(view?.source, "base", def.key);
+      assert.deepEqual(view?.value, value, def.key);
+      // Volver a .env restaura el valor original.
+      await settingsStore.save({ reset: [def.key] }, actor);
+      assert.deepEqual(currentValue(def), before, `${def.key} al volver a .env`);
+    }
+    assert.equal(await count("SELECT COUNT(*) FROM app_settings"), 0);
   });
 
   test("un texto que parece numero (producto 1300) se guarda y se aplica como texto", async () => {
