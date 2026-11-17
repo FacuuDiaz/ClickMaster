@@ -31,6 +31,8 @@ before(async () => {
   config.edr.clientProductId = "1286";
   config.edr.country = "Brazil";
   config.edr.maxRetries = 2;
+  // Las capturas van a la base: este test es unitario (ver captures.test.ts).
+  config.capture.mode = "off";
 });
 
 after(() => {
@@ -61,6 +63,7 @@ describe("cliente JSON-RPC de EDR", () => {
       client_product_id: "1286",
       op_country: "==",
       country: "Brazil",
+      orderby_clause: "edr_date asc",
     });
   });
 

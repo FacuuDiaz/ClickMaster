@@ -15,8 +15,12 @@ import {
   type ClaimedJob,
 } from "../db/processingRepo";
 import { extractLink } from "../parser/extractLink";
-import { launchBrowser, visitUrl, type VisitResult } from "../checker/linkChecker";
+import { launchBrowser, visitUrl, type VisitOptions, type VisitResult } from "../checker/linkChecker";
 import { retryPolicy } from "../checker/classifyVisit";
+import { policiesCache } from "../policies/repo";
+import { nextAllowedAt } from "../policies/schedule";
+import { withinVisitHours } from "../policies/visitHours";
+import type { Policy } from "../policies/schema";
 
 /** Espera con despertador: wait() vuelve por timeout o por notify(). */
 class Signal {
@@ -50,10 +54,22 @@ export interface WorkerSettings {
   recoveryIntervalMs: number;
 }
 
+/**
+ * Por que el worker no debe tomar SMS ahora (o null si puede). Fuera del
+ * horario global de visitas, o sin politica activa (solo la instancia de
+ * produccion: los tests arman workers sin politicas).
+ */
+export type WaitReason = "fuera_de_horario" | "sin_politica";
+export type WorkerGate = () => WaitReason | null;
+
+const hoursGate: WorkerGate = () => (withinVisitHours(new Date()) ? null : "fuera_de_horario");
+export const productionGate: WorkerGate = () => (policiesCache.active().length === 0 ? "sin_politica" : hoursGate());
+
 export interface WorkerDeps {
   settings?: Partial<WorkerSettings>;
+  gate?: WorkerGate;
   // Reemplazable en tests para no levantar Chromium.
-  visit?: (url: string) => Promise<VisitResult>;
+  visit?: (url: string, options: VisitOptions) => Promise<VisitResult>;
 }
 
 interface WorkerStats {
@@ -74,6 +90,21 @@ function emptyStats(): WorkerStats {
 
 const SUMMARY_INTERVAL_MS = 60_000;
 
+/** Opciones de visita de la politica; lo que no define queda en el default global. */
+export function visitOptionsFor(policy: Policy | null): VisitOptions {
+  const v = policy?.rules.visit;
+  if (!v) return {};
+  const options: VisitOptions = {};
+  if (v.timeoutMs !== null) options.timeoutMs = v.timeoutMs;
+  if (v.blockResources !== null) options.blockResources = v.blockResources;
+  if (v.dwellMinMs !== null || v.dwellMaxMs !== null) {
+    const min = v.dwellMinMs ?? v.dwellMaxMs ?? 0;
+    const max = v.dwellMaxMs ?? min;
+    options.dwellMs = min + Math.floor(Math.random() * (max - min + 1));
+  }
+  return options;
+}
+
 /**
  * Consume la cola persistente (sms_processing) con concurrencia limitada.
  *
@@ -90,8 +121,9 @@ const SUMMARY_INTERVAL_MS = 60_000;
 export class ProcessingWorker {
   readonly workerId = `${os.hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
   private readonly hostPrefix = `${os.hostname()}:`;
-  private readonly settings: WorkerSettings;
-  private readonly visitFn: (url: string) => Promise<VisitResult>;
+  // Valores fijos de los tests; el resto se lee en vivo de config.worker.
+  private readonly settingsOverride: Partial<WorkerSettings>;
+  private readonly visitFn: (url: string, options: VisitOptions) => Promise<VisitResult>;
 
   private running = false;
   private pauseHolders = 0;
@@ -100,6 +132,8 @@ export class ProcessingWorker {
   private readonly signal = new Signal();
   private loopDone: Promise<void> | null = null;
   private timers: NodeJS.Timeout[] = [];
+  private recoveryTimer: NodeJS.Timeout | null = null;
+  private stopping: Promise<void> | null = null;
 
   private browser: Browser | null = null;
   private browserLaunch: Promise<Browser> | null = null;
@@ -107,9 +141,20 @@ export class ProcessingWorker {
 
   private stats = emptyStats();
   private totals = emptyStats();
+  private readonly gate: WorkerGate;
 
   constructor(deps: WorkerDeps = {}) {
-    this.settings = {
+    this.settingsOverride = deps.settings ?? {};
+    this.gate = deps.gate ?? hoursGate;
+    this.visitFn = deps.visit ?? ((url, options) => this.visitWithSharedBrowser(url, options));
+  }
+
+  /**
+   * Se lee en cada uso (no se copia al construir): un cambio de
+   * configuracion desde la web aplica en la proxima vuelta del loop.
+   */
+  private get settings(): WorkerSettings {
+    return {
       concurrency: config.worker.concurrency,
       claimBatchSize: config.worker.claimBatchSize,
       pollIntervalMs: config.worker.pollIntervalMs,
@@ -118,9 +163,8 @@ export class ProcessingWorker {
       retryBaseDelayMs: config.worker.retryBaseDelayMs,
       browserIdleCloseMs: config.worker.browserIdleCloseMs,
       recoveryIntervalMs: config.worker.recoveryIntervalMs,
-      ...deps.settings,
+      ...this.settingsOverride,
     };
-    this.visitFn = deps.visit ?? ((url) => this.visitWithSharedBrowser(url));
   }
 
   get isRunning(): boolean {
@@ -132,6 +176,9 @@ export class ProcessingWorker {
       workerId: this.workerId,
       running: this.running,
       paused: this.pauseHolders > 0,
+      // En espera: fuera del horario global o sin politica activa no se reclaman trabajos.
+      waiting: this.gate(),
+      outsideHours: this.gate() === "fuera_de_horario",
       active: this.active,
       buffered: this.buffer.length,
       browserOpen: this.browser !== null,
@@ -144,6 +191,8 @@ export class ProcessingWorker {
   }
 
   async start(): Promise<void> {
+    // Apagar y prender desde la web puede pisarse: nunca dos loops a la vez.
+    if (this.stopping) await this.stopping;
     if (this.running) return;
     this.running = true;
 
@@ -151,18 +200,36 @@ export class ProcessingWorker {
     // ya no existe, no hace falta esperar a que venzan.
     await this.recover({ ownerPrefix: this.hostPrefix });
 
-    this.timers.push(setInterval(() => void this.recover(), this.settings.recoveryIntervalMs));
+    this.scheduleRecovery();
     this.timers.push(setInterval(() => void this.logSummary(), SUMMARY_INTERVAL_MS));
     this.loopDone = this.loop();
     log.info("worker: iniciado", { workerId: this.workerId, ...this.settings });
   }
 
+  // setTimeout encadenado (no setInterval): toma el intervalo vigente en cada vuelta.
+  private scheduleRecovery(): void {
+    if (!this.running) return;
+    this.recoveryTimer = setTimeout(() => {
+      void this.recover().finally(() => this.scheduleRecovery());
+    }, this.settings.recoveryIntervalMs);
+  }
+
   /** Apagado ordenado: devuelve el buffer a la cola y espera las visitas abiertas. */
   async stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
     if (!this.running) return;
+    this.stopping = this.doStop().finally(() => {
+      this.stopping = null;
+    });
+    return this.stopping;
+  }
+
+  private async doStop(): Promise<void> {
     this.running = false;
     this.timers.forEach(clearInterval);
     this.timers = [];
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = null;
     this.signal.notify();
     await this.loopDone;
     await this.releaseBuffer();
@@ -222,6 +289,14 @@ export class ProcessingWorker {
     while (this.running) {
       if (this.paused) {
         await this.signal.wait(1000);
+        continue;
+      }
+
+      if (this.buffer.length === 0 && this.gate() !== null) {
+        // En espera (fuera de horario o sin politica activa): lo que esta en
+        // curso termina, no se toma mas.
+        if (this.active === 0) await this.closeBrowserIfIdle();
+        await this.signal.wait(Math.max(s.pollIntervalMs, 30_000));
         continue;
       }
 
@@ -292,20 +367,27 @@ export class ProcessingWorker {
         return;
       }
 
+      // La politica que se le asigno al ingestarlo define como se visita.
+      // Si se borro despues, se usan los valores globales.
+      const policy = policiesCache.byId(job.policyId);
+      const maxAttempts = policy?.rules.visit.maxAttempts ?? s.maxAttempts;
+
       const startedAt = new Date();
-      const visit = await this.visitFn(link);
+      const visit = await this.visitFn(link, visitOptionsFor(policy));
       const finishedAt = new Date();
       this.stats.visits++;
       this.stats.visitMsTotal += finishedAt.getTime() - startedAt.getTime();
 
-      const policy = retryPolicy(visit.outcome);
+      const retry = retryPolicy(visit.outcome);
       let nextStatus: AttemptResult["nextStatus"];
       let nextAttemptAt: Date | null = null;
-      if (policy === "exito") {
+      if (retry === "exito") {
         nextStatus = "success";
-      } else if (policy === "transitorio" && job.attempt < s.maxAttempts) {
+      } else if (retry === "transitorio" && job.attempt < maxAttempts) {
         nextStatus = "retry";
         nextAttemptAt = new Date(finishedAt.getTime() + s.retryBaseDelayMs * 2 ** (job.attempt - 1));
+        // Un reintento que cae fuera del horario de la politica espera a la proxima franja.
+        if (policy) nextAttemptAt = nextAllowedAt(policy.rules.schedule, nextAttemptAt, config.edr.timezoneOffsetMinutes);
       } else {
         nextStatus = "failed";
       }
@@ -415,7 +497,7 @@ export class ProcessingWorker {
     return this.browserLaunch;
   }
 
-  private async visitWithSharedBrowser(url: string): Promise<VisitResult> {
+  private async visitWithSharedBrowser(url: string, options: VisitOptions): Promise<VisitResult> {
     let browser: Browser;
     try {
       browser = await this.getBrowser();
@@ -430,7 +512,7 @@ export class ProcessingWorker {
         errorMessage: `No se pudo iniciar Chromium: ${errorMessage(err)}`,
       };
     }
-    return visitUrl(browser, url);
+    return visitUrl(browser, url, options);
   }
 
   private async closeBrowserIfIdle(): Promise<void> {
@@ -470,4 +552,4 @@ export class ProcessingWorker {
 }
 
 // Instancia unica del proceso (server, clicks y endpoints la comparten).
-export const processingWorker = new ProcessingWorker();
+export const processingWorker = new ProcessingWorker({ gate: productionGate });

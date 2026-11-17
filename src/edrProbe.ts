@@ -50,6 +50,10 @@ async function main() {
         identidadesUnicas: ids.size,
         llegoAlTope: config.edr.maxRowsPerRequest > 0 && data.length >= config.edr.maxRowsPerRequest,
         topeConfigurado: config.edr.maxRowsPerRequest,
+        // La paginacion por "ultimo registro" necesita que vengan ordenadas por edr_date.
+        orden: ordenDe(data),
+        edrDatePrimerRegistro: edrOf(data[0]),
+        edrDateUltimoRegistro: edrOf(data[data.length - 1]),
         edrDateMin: dates[0] ?? null,
         edrDateMax: dates[dates.length - 1] ?? null,
         // Si hay filas con edr_date == end_date, la API trata end_date como inclusivo.
@@ -62,6 +66,23 @@ async function main() {
       2
     )
   );
+}
+
+function edrOf(r: unknown): string | null {
+  const v = r && typeof r === "object" ? (r as Record<string, unknown>).edr_date : null;
+  return typeof v === "string" ? v : null;
+}
+
+/** "ascendente", "descendente" o "desordenado" (el formato YYYY.MM.DD HH:mm:ss ordena como texto). */
+function ordenDe(data: unknown[]): string {
+  const values = data.map(edrOf).filter((v): v is string => v !== null);
+  let asc = true;
+  let desc = true;
+  for (let i = 1; i < values.length; i++) {
+    if (values[i] < values[i - 1]) asc = false;
+    if (values[i] > values[i - 1]) desc = false;
+  }
+  return asc ? "ascendente" : desc ? "descendente" : "desordenado";
 }
 
 main().catch((err) => {

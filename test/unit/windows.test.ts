@@ -23,6 +23,19 @@ describe("ventanas EDR", () => {
     assert.equal(iso(w?.end), "2026-10-13T00:30:00.000Z");
   });
 
+  test("cambiar el tamano de ventana realinea sin huecos ni repetidos", () => {
+    const now = new Date("2026-10-15T00:00:00Z");
+    // Cursor en 09:30 local (12:30Z), ventana nueva de 60 min: primero 09:30-10:00, despues 10:00-11:00.
+    const first = nextScheduledWindow(new Date("2026-10-14T12:30:00Z"), now, { ...plan, windowMinutes: 60 });
+    assert.equal(iso(first?.start), "2026-10-14T12:30:00.000Z");
+    assert.equal(iso(first?.end), "2026-10-14T13:00:00.000Z");
+    const second = nextScheduledWindow(first!.end, now, { ...plan, windowMinutes: 60 });
+    assert.equal(iso(second?.end), "2026-10-14T14:00:00.000Z");
+    // Achicar a 10 min desde un cursor alineado a 30: ventanas de 10 desde ahi.
+    const small = nextScheduledWindow(new Date("2026-10-14T12:30:00Z"), now, { ...plan, windowMinutes: 10 });
+    assert.equal(iso(small?.end), "2026-10-14T12:40:00.000Z");
+  });
+
   test("respeta el margen de seguridad: no pide una ventana recien cerrada", () => {
     const cursor = new Date("2026-10-14T12:00:00Z");
     assert.equal(nextScheduledWindow(cursor, new Date("2026-10-14T12:33:00Z"), plan), null);

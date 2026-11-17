@@ -3,6 +3,7 @@ import { formatApiDate } from "../edr/apiTime";
 import { log, errorMessage } from "../logger";
 import { edrEnvelopeSchema } from "../parser/smsRecordSchema";
 import { httpPost, type HttpResponse } from "./httpPost";
+import { insertCapture, insertCaptureSafe, setRowsCount, type CaptureOrigin } from "../captures/repo";
 
 export interface EdrRange {
   start: Date;
@@ -17,7 +18,12 @@ export class EdrError extends Error {
   }
 }
 
-export type EdrFetcher = (range: EdrRange) => Promise<unknown[]>;
+export interface FetchContext {
+  // Corrida de ingesta que pide el rango (para asociar la captura).
+  runId?: number | null;
+}
+
+export type EdrFetcher = (range: EdrRange, ctx?: FetchContext) => Promise<unknown[]>;
 
 let requestId = 0;
 
@@ -32,6 +38,11 @@ function buildRequest(range: EdrRange) {
     args.op_country = "==";
     args.country = config.edr.country;
   }
+  // Segun la doc de Alaris, sin orderby_clause "sorting is disabled": el
+  // orden no esta garantizado. La paginacion por fecha del ultimo registro
+  // (ingestRange) lo necesita, asi que se pide siempre. EDR_EXTRA_ARGS lo
+  // puede pisar; si la respuesta llega desordenada, la ingesta lo detecta.
+  args.orderby_clause = "edr_date asc";
   Object.assign(args, config.edr.extraArgs);
   return {
     id: ++requestId,
@@ -50,23 +61,87 @@ function describeRpcError(error: unknown): string {
   return String(error).slice(0, 300);
 }
 
-async function requestOnce(range: EdrRange): Promise<unknown[]> {
+/** Los args del request, sin el auth (que va en params.auth): se pueden guardar. */
+export function requestArgs(range: EdrRange): Record<string, unknown> {
+  return buildRequest(range).params.args;
+}
+
+async function capture(range: EdrRange, ctx: FetchContext, origin: CaptureOrigin, body: string, error: string | null, rows: number | null) {
+  return insertCaptureSafe({
+    runId: ctx.runId ?? null,
+    origin,
+    rangeStart: range.start,
+    rangeEnd: range.end,
+    requestArgs: requestArgs(range),
+    body,
+    errorMessage: error,
+    rowsCount: rows,
+  });
+}
+
+async function post(range: EdrRange): Promise<HttpResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (config.edr.bearerToken) headers.Authorization = `Bearer ${config.edr.bearerToken}`;
-
-  const startedAt = Date.now();
-  let res: HttpResponse;
   try {
-    res = await httpPost(config.edr.url, JSON.stringify(buildRequest(range)), headers, config.edr.httpTimeoutMs);
+    return await httpPost(config.edr.url, JSON.stringify(buildRequest(range)), headers, config.edr.httpTimeoutMs);
   } catch (err) {
     // Timeout, DNS, conexion rechazada o cortada: todo transitorio.
     throw new EdrError(`No se pudo obtener respuesta de la API EDR: ${errorMessage(err)}`, true);
   }
+}
+
+/**
+ * Pide un rango y guarda la respuesta tal cual como captura, sin ingestar
+ * (para inspeccionarla desde la web). Devuelve el id de la captura.
+ */
+export async function captureRange(range: EdrRange, createdBy: string | null): Promise<{ captureId: number; rows: number | null }> {
+  const res = await post(range);
+  if (res.status < 200 || res.status >= 300) {
+    throw new EdrError(`API EDR respondio HTTP ${res.status} ${res.statusText}`, false);
+  }
+  let rows: number | null = null;
+  try {
+    const parsed = edrEnvelopeSchema.safeParse(JSON.parse(res.body));
+    if (parsed.success) rows = parsed.data.length;
+  } catch {
+    // Se guarda igual: justamente sirve para ver que devolvio.
+  }
+  const captureId = await insertCapture({
+    runId: null,
+    origin: "manual",
+    rangeStart: range.start,
+    rangeEnd: range.end,
+    requestArgs: requestArgs(range),
+    body: res.body,
+    rowsCount: rows,
+    createdBy,
+  });
+  return { captureId, rows };
+}
+
+async function requestOnce(range: EdrRange, ctx: FetchContext = {}): Promise<unknown[]> {
+  const startedAt = Date.now();
+  let res: HttpResponse;
+  try {
+    res = await post(range);
+  } catch (err) {
+    throw err;
+  }
 
   if (res.status < 200 || res.status >= 300) {
     const retryable = res.status >= 500 || res.status === 429 || res.status === 408;
-    throw new EdrError(`API EDR respondio HTTP ${res.status} ${res.statusText}`, retryable);
+    const message = `API EDR respondio HTTP ${res.status} ${res.statusText}`;
+    if (config.capture.mode !== "off" && res.body) await capture(range, ctx, "error", res.body, message, null);
+    throw new EdrError(message, retryable);
   }
+
+  // Modo "todas": se guarda antes del parse (el body ya esta en memoria;
+  // asi no conviven la copia comprimida y todos los objetos parseados).
+  const capturedId = config.capture.mode === "todas" ? await capture(range, ctx, "ingesta", res.body, null, null) : null;
+  // Modo "errores": la respuesta se guarda solo si no se puede usar.
+  const captureError = async (message: string) => {
+    if (config.capture.mode === "errores") await capture(range, ctx, "error", res.body, message, null);
+  };
 
   // Alaris no pagina: la respuesta entera (~40 MB por 20.000 EDR) queda en
   // memoria como string hasta que termina el parse; despues solo quedan los
@@ -76,9 +151,10 @@ async function requestOnce(range: EdrRange): Promise<unknown[]> {
   try {
     raw = JSON.parse(res.body);
   } catch (err) {
-    throw new EdrError(`API EDR devolvio un JSON invalido: ${errorMessage(err)}`, true);
+    const message = `API EDR devolvio un JSON invalido: ${errorMessage(err)}`;
+    await captureError(message);
+    throw new EdrError(message, true);
   }
-  res.body = "";
   log.info("edr: respuesta recibida", {
     start: range.start.toISOString(),
     end: range.end.toISOString(),
@@ -88,16 +164,20 @@ async function requestOnce(range: EdrRange): Promise<unknown[]> {
 
   // JSON-RPC informa los errores con HTTP 200 y un campo "error" en el body.
   if (raw && typeof raw === "object" && "error" in raw && (raw as { error: unknown }).error) {
-    throw new EdrError(
-      `API EDR respondio error JSON-RPC (${describeRpcError((raw as { error: unknown }).error)})`,
-      false
-    );
+    const message = `API EDR respondio error JSON-RPC (${describeRpcError((raw as { error: unknown }).error)})`;
+    await captureError(message);
+    throw new EdrError(message, false);
   }
 
   const envelope = edrEnvelopeSchema.safeParse(raw);
   if (!envelope.success) {
-    throw new EdrError("La respuesta de la API EDR no tiene el formato esperado (result.data)", false);
+    const message = "La respuesta de la API EDR no tiene el formato esperado (result.data)";
+    await captureError(message);
+    throw new EdrError(message, false);
   }
+  // Ya no hace falta el texto: se suelta antes de devolver los objetos.
+  res.body = "";
+  if (capturedId !== null) await setRowsCount(capturedId, envelope.data.length).catch(() => undefined);
   return envelope.data;
 }
 
@@ -105,10 +185,10 @@ async function requestOnce(range: EdrRange): Promise<unknown[]> {
  * Pide los EDR de un rango con reintentos (backoff exponencial) para los
  * errores transitorios. Devuelve los registros crudos, sin validar.
  */
-export const fetchEdrRange: EdrFetcher = async (range) => {
+export const fetchEdrRange: EdrFetcher = async (range, ctx) => {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await requestOnce(range);
+      return await requestOnce(range, ctx);
     } catch (err) {
       const retryable = err instanceof EdrError && err.retryable;
       if (!retryable || attempt >= config.edr.maxRetries) throw err;

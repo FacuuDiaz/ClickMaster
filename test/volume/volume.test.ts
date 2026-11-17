@@ -137,8 +137,9 @@ test("rafaga real: >20.000 SMS en 36 s con una API que corta en 20.000", async (
       const t = Date.parse(x.edr_date.replace(/\./g, "-").replace(" ", "T") + "-03:00");
       return t >= r.start.getTime() && t <= r.end.getTime();
     });
-    // Alaris corta en 20.000 y sin orden por fecha: se mezcla antes de cortar.
-    inRange.sort(() => Math.random() - 0.5);
+    // Alaris devuelve ordenado por fecha y corta en 20.000: la pagina
+    // siguiente se pide desde la fecha del ultimo registro.
+    inRange.sort((a, b) => a.edr_date.localeCompare(b.edr_date));
     const rows = inRange.slice(0, 20_000);
     requests.push({ span: (r.end.getTime() - r.start.getTime()) / 1000, rows: rows.length });
     return JSON.parse(JSON.stringify(rows)) as unknown[];
@@ -151,6 +152,8 @@ test("rafaga real: >20.000 SMS en 36 s con una API que corta en 20.000", async (
   );
   assert.equal(run.status, "success", run.error ?? "");
   assert.equal(await count("SELECT COUNT(*) FROM sms_content"), all.length);
+  // 25.030 SMS con tope 20.000: 2 consultas (antes, partiendo en mitades, 11).
+  assert.equal(requests.length, 2);
   const capped = requests.filter((r) => r.rows >= 20_000).length;
   console.log(
     `\nRESULTADO RAFAGA ${JSON.stringify({

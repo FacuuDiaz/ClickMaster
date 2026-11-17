@@ -15,6 +15,8 @@ import {
   type ChecksBucket,
   type IngestBucket,
 } from "../db/dashboardRepo";
+import { policyHourly, recentRate } from "../db/complianceRepo";
+import { dayCompliance, dayRange, lastDays } from "../policies/compliance";
 
 const PRESETS_MS: Record<string, number> = {
   "30m": 30 * 60_000,
@@ -70,6 +72,7 @@ const checksQuery = z.object({
 
 const smsQuery = z.object({
   status: z.enum(["pending", "processing", "retry", "success", "failed", "skipped"]).optional(),
+  policy: z.union([z.literal("ninguna"), z.coerce.number().int().positive()]).optional(),
   ...pageQuery,
 });
 
@@ -87,7 +90,7 @@ const MAX_CACHE_ENTRIES = 200;
  * llegan varios a la vez mientras la consulta corre, esperan todos la
  * misma promesa: N pestanas abiertas no son N consultas a MySQL.
  */
-function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
+function cached<T>(key: string, fn: () => Promise<T>, ttlSeconds = config.reports.cacheSeconds): Promise<T> {
   const now = Date.now();
   const hit = cache.get(key);
   if (hit && hit.expires > now) return hit.value as Promise<T>;
@@ -97,7 +100,7 @@ function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
     if (cache.size >= MAX_CACHE_ENTRIES) cache.clear();
   }
   const value = fn();
-  cache.set(key, { expires: now + config.reports.cacheSeconds * 1000, value });
+  cache.set(key, { expires: now + ttlSeconds * 1000, value });
   // Un error no se cachea: el proximo pedido reintenta.
   value.catch(() => cache.delete(key));
   return value;
@@ -227,9 +230,82 @@ dashboardRouter.get("/dashboard/sms", async (req, res) => {
   const cursor = q.data.cursor ? decodeCursor(q.data.cursor) : undefined;
   if (cursor === null) return void res.status(400).json({ error: "cursor invalido" });
   const { from, to } = range.data;
-  const key = `sms:${from.getTime()}:${to.getTime()}:${q.data.status ?? ""}:${q.data.cursor ?? ""}:${q.data.limit}`;
+  const key = `sms:${from.getTime()}:${to.getTime()}:${q.data.status ?? ""}:${q.data.policy ?? ""}:${q.data.cursor ?? ""}:${q.data.limit}`;
   try {
-    res.json(await cached(key, () => listSms({ from, to, status: q.data.status, cursor, limit: q.data.limit })));
+    res.json(
+      await cached(key, () =>
+        listSms({ from, to, status: q.data.status, policy: q.data.policy, cursor, limit: q.data.limit })
+      )
+    );
+  } catch (err) {
+    handleError(req, res, err);
+  }
+});
+
+// ---------- Cumplimiento de politicas ----------
+
+const DAY_MS = 86_400_000;
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Un dia ya no cambia cuando paso tambien el dia siguiente (dia vencido se
+// visita al otro dia): se cachea 10 min; el resto, como los demas reportes.
+function complianceTtl(day: string, now: Date): number {
+  return now.getTime() >= dayRange(day).end.getTime() + DAY_MS ? 600 : config.reports.cacheSeconds;
+}
+
+const complianceQuery = z.object({ days: z.coerce.number().int().min(1).max(14).default(7) });
+
+dashboardRouter.get("/dashboard/compliance", async (req, res) => {
+  const q = complianceQuery.safeParse(req.query);
+  if (!q.success) return badRequest(res, q.error);
+  const now = new Date();
+  try {
+    const rate = await cached("compliance:rate", () => recentRate(now));
+    // Secuencial: el pool de reportes tiene 2 conexiones.
+    const days = [];
+    for (const day of lastDays(now, q.data.days)) {
+      days.push(await cached(`compliance:${day}`, () => dayCompliance(day, now, rate), complianceTtl(day, now)));
+    }
+    res.json({ generatedAt: now, ratePerHour: rate, days });
+  } catch (err) {
+    handleError(req, res, err);
+  }
+});
+
+const hourlyQuery = z.object({
+  day: z.string().regex(DAY_RE, "day con formato AAAA-MM-DD"),
+  policy: z.union([z.literal("ninguna"), z.coerce.number().int().positive()]),
+});
+
+/** Avance por hora de una politica en un dia: elegidos y 200 acumulables. */
+dashboardRouter.get("/dashboard/compliance/hourly", async (req, res) => {
+  const q = hourlyQuery.safeParse(req.query);
+  if (!q.success) return badRequest(res, q.error);
+  const now = new Date();
+  const policyId = q.data.policy === "ninguna" ? null : q.data.policy;
+  try {
+    const day = await cached(`compliance:${q.data.day}`, () => dayCompliance(q.data.day, now), complianceTtl(q.data.day, now));
+    const item = day.policies.find((p) => p.policyId === policyId);
+    if (!item) return void res.status(404).json({ error: "Esa politica no tiene SMS ese dia" });
+    const from = day.start;
+    const to = new Date(item.deadline);
+    const buckets = await cached(
+      `compliance:hourly:${q.data.day}:${policyId}`,
+      () => policyHourly(policyId, { start: day.start, end: day.end }, from, to),
+      complianceTtl(q.data.day, now)
+    );
+    res.json({
+      day: q.data.day,
+      from,
+      to,
+      // Horas transcurridas desde el inicio (el grafico no dibuja el futuro).
+      nowHour: Math.min(buckets.length, Math.max(0, Math.ceil((now.getTime() - from.getTime()) / 3_600_000))),
+      target: item.target,
+      name: item.name,
+      // Para rotular las horas en hora de Alaris (no la del navegador).
+      offsetMinutes: config.edr.timezoneOffsetMinutes,
+      buckets,
+    });
   } catch (err) {
     handleError(req, res, err);
   }

@@ -6,18 +6,43 @@ import { ensureSchema } from "./db/schema";
 import { createApp } from "./http/app";
 import { Scheduler } from "./service/scheduler";
 import { processingWorker } from "./worker/processingWorker";
+import { settingsStore } from "./settings/store";
+import { ensureSingleActive, policiesCache, seedDefaultPolicies } from "./policies/repo";
+
+let shuttingDown = false;
 
 async function main() {
   await assertDbConnection();
   await ensureSchema();
-
-  const server = createApp().listen(config.port, () => {
-    log.info("http: escuchando", { port: config.port });
-  });
+  // Lo editado desde la web pisa a .env antes de que arranque nada.
+  await settingsStore.reload();
+  settingsStore.startPolling();
+  await seedDefaultPolicies();
+  await ensureSingleActive();
+  await policiesCache.refresh();
+  policiesCache.startPolling();
 
   // Ingesta (scheduler) y verificacion (worker) arrancan solos y van
   // desacoplados: la ingesta llena la cola y el worker la drena a su ritmo.
   const scheduler = new Scheduler(() => processingWorker.wake());
+
+  const server = createApp({ scheduler }).listen(config.port, () => {
+    log.info("http: escuchando", { port: config.port });
+  });
+
+  // Prender/apagar desde la web (o desde otra instancia, al releer la base).
+  settingsStore.onChange((changed) => {
+    if (shuttingDown) return;
+    if (changed.includes("scheduler.enabled")) {
+      if (config.scheduler.enabled) scheduler.start();
+      else void scheduler.stop();
+    }
+    if (changed.includes("worker.enabled")) {
+      const toggle = config.worker.enabled ? processingWorker.start() : processingWorker.stop();
+      toggle.catch((err) => log.error("worker: no se pudo prender/apagar", { error: errorMessage(err) }));
+    }
+  });
+
   if (config.scheduler.enabled) scheduler.start();
   else log.warn("scheduler: deshabilitado (SCHEDULER_ENABLED=false)");
   if (config.worker.enabled) await processingWorker.start();
@@ -25,12 +50,13 @@ async function main() {
 
   // docker stop manda SIGTERM: se devuelven a la cola los trabajos sin
   // empezar y se espera a las visitas abiertas (stop_grace_period en compose).
-  let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info("app: apagando", { signal });
     server.close();
+    settingsStore.stopPolling();
+    policiesCache.stopPolling();
     try {
       await scheduler.stop();
       await processingWorker.stop();

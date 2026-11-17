@@ -11,10 +11,12 @@ import { messageKey } from "./smsContentRepo";
  *                           │──fallo definitivo─────> failed
  *                           │──intentos agotados────> failed
  *                           └──reserva vencida──────> retry / failed (recoverExpiredLeases)
- *   skipped: nunca entra a la cola (sin link o fuera de la muestra).
+ *   skipped: nunca entra a la cola (sin link, fuera de la muestra, por
+ *            politica o por tope de la politica).
  */
 export type JobStatus = "pending" | "processing" | "retry" | "success" | "failed" | "skipped";
-export type SkipReason = "sin_link" | "fuera_de_muestra";
+export type { SkipReason } from "../policies/select";
+import type { SkipReason } from "../policies/select";
 
 const MAX_ERROR_LENGTH = 255;
 
@@ -56,6 +58,9 @@ export interface NewJob {
   edrDate: Date;
   status: "pending" | "skipped";
   skipReason: SkipReason | null;
+  policyId: number | null;
+  // Para pending: desde cuando se puede visitar (horario de la politica).
+  nextAttemptAt: Date | null;
 }
 
 /**
@@ -68,7 +73,7 @@ export async function insertJobs(conn: DbConnection, jobs: NewJob[], now: Date):
   await conn.query(
     `INSERT INTO sms_processing
        (sms_content_id, client_message_id, vendor_message_id, ingest_run_id, edr_date,
-        status, skip_reason, next_attempt_at, created_at, finished_at)
+        status, skip_reason, policy_id, next_attempt_at, created_at, finished_at)
      VALUES ?
      ON DUPLICATE KEY UPDATE id = id`,
     [
@@ -80,7 +85,8 @@ export async function insertJobs(conn: DbConnection, jobs: NewJob[], now: Date):
         j.edrDate,
         j.status,
         j.skipReason,
-        j.status === "pending" ? now : null,
+        j.policyId,
+        j.status === "pending" ? j.nextAttemptAt ?? now : null,
         now,
         j.status === "skipped" ? now : null,
       ]),
@@ -95,6 +101,7 @@ export interface ClaimedJob {
   smsContentId: number;
   attempt: number;
   ingestRunId: number | null;
+  policyId: number | null;
   // null si la fila de sms_content ya no existe.
   text: string | null;
 }
@@ -140,7 +147,7 @@ export async function claimJobs(
   if (ids.length === 0) return [];
 
   const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT p.id, p.sms_content_id, p.attempts, p.ingest_run_id, c.text
+    `SELECT p.id, p.sms_content_id, p.attempts, p.ingest_run_id, p.policy_id, c.text
        FROM sms_processing p
        LEFT JOIN sms_content c ON c.id = p.sms_content_id
       WHERE p.id IN (?)
@@ -152,6 +159,7 @@ export async function claimJobs(
     smsContentId: Number(r.sms_content_id),
     attempt: Number(r.attempts),
     ingestRunId: r.ingest_run_id === null ? null : Number(r.ingest_run_id),
+    policyId: r.policy_id === null || r.policy_id === undefined ? null : Number(r.policy_id),
     text: r.text ?? null,
   }));
 }
@@ -224,6 +232,12 @@ export async function completeAttempt(r: AttemptResult): Promise<boolean> {
         r.workerId,
       ]
     );
+    // Click realizado = el sitio respondio 200 (la respuesta final, despues de
+    // las redirecciones). Un error del sitio (404, 500...), un timeout o un DNS
+    // caido no cuentan. Se suma aunque la reserva ya sea de otro worker.
+    if (r.httpStatus === 200) {
+      await conn.query("UPDATE sms_processing SET clicks = clicks + 1 WHERE id = ?", [r.jobId]);
+    }
     const [result] = await conn.query<ResultSetHeader>(
       `UPDATE sms_processing
           SET status = ?, next_attempt_at = ?, locked_by = NULL, locked_until = NULL,

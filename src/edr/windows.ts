@@ -52,7 +52,13 @@ export function nextScheduledWindow(
     start = new Date(alignDown(horizon, plan.windowMinutes, plan.offsetMinutes).getTime() - windowMs);
   }
 
-  const end = new Date(start.getTime() + windowMs);
+  // El fin se alinea a la grilla del tamano actual. Con un cursor alineado
+  // es lo mismo que start + ventana; si el tamano se cambio desde la web
+  // (ej. 30 -> 60 min con el cursor en 09:30), la primera ventana se recorta
+  // hasta el proximo borde (09:30-10:00) y despues sigue alineada. Nunca
+  // quedan huecos ni rangos repetidos: siempre arranca en el cursor.
+  let end = alignDown(new Date(start.getTime() + windowMs), plan.windowMinutes, plan.offsetMinutes);
+  if (end.getTime() <= start.getTime()) end = new Date(start.getTime() + windowMs);
   return end.getTime() <= horizon.getTime() ? { start, end } : null;
 }
 

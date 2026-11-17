@@ -42,6 +42,22 @@ function timezoneOffsetMinutes(name: string, fallback: string): number {
   return match[1] === "-" ? -minutes : minutes;
 }
 
+function oneOf<T extends string>(name: string, options: readonly T[], fallback: T): T {
+  const raw = process.env[name] || fallback;
+  if (!options.includes(raw as T)) {
+    throw new Error(`${name} tiene que ser uno de: ${options.join(", ")}`);
+  }
+  return raw as T;
+}
+
+export const CAPTURE_MODES = ["off", "errores", "todas"] as const;
+
+function hhmm(name: string, fallback: string): string {
+  const value = (process.env[name] || fallback).trim();
+  if (!/^([01]\d|2[0-3]):[0-5]\d$|^24:00$/.test(value)) throw new Error(`${name} tiene que tener formato HH:MM (ej. 09:00)`);
+  return value;
+}
+
 function optional(name: string): string | undefined {
   const value = process.env[name];
   return value ? value : undefined;
@@ -119,6 +135,19 @@ export const config = {
     // Una rafaga real de un solo producto supero 20.000 SMS en ~36 s: el
     // rango minimo tiene que poder bajar a pocos segundos.
     minSplitSeconds: int("EDR_MIN_SPLIT_SECONDS", 1, 1),
+    // Si una respuesta llega al tope se pide la pagina siguiente desde la
+    // fecha del ultimo registro. Tope de paginas por rango (contra loops).
+    maxPagesPerWindow: int("EDR_MAX_PAGES_PER_WINDOW", 50, 1, 10_000),
+  },
+
+  // Copias temporales de las respuestas de Alaris para inspeccionarlas y
+  // decidir (simular politicas, reprocesar, descartar). Ver src/captures/.
+  capture: {
+    // off | errores (respuestas que fallan y registros invalidos) | todas
+    mode: oneOf("EDR_CAPTURE_MODE", CAPTURE_MODES, "errores") as (typeof CAPTURE_MODES)[number],
+    retentionHours: int("EDR_CAPTURE_RETENTION_HOURS", 24, 1, 24 * 30),
+    // Espacio maximo (comprimido) en la base: se borran las mas viejas.
+    maxTotalMb: int("EDR_CAPTURE_MAX_TOTAL_MB", 500, 10, 100_000),
   },
 
   ingest: {
@@ -128,6 +157,7 @@ export const config = {
 
   scheduler: {
     enabled: bool("SCHEDULER_ENABLED", true),
+    // Tiene que dividir el dia (5, 10, 15, 20, 30, 60... 1440): editable desde la web.
     windowMinutes: int("EDR_WINDOW_MINUTES", 30, 1, 24 * 60),
     // Cada cuanto se fija si hay una ventana lista para pedir. No es el tamano
     // de la ventana: con tick corto, despues de un reinicio se retoma enseguida.
@@ -174,11 +204,20 @@ export const config = {
     recoveryIntervalMs: int("WORKER_RECOVERY_INTERVAL_MS", 60000, 1000),
   },
 
+  // Horario global de visitas automaticas (hora de Alaris). Los dias se
+  // escriben como "lun-vie", "lun,mie,vie" o "todos" (src/policies/visitHours.ts).
+  visitHours: {
+    enabled: bool("VISIT_HOURS_ENABLED", false),
+    days: (process.env.VISIT_DAYS || "lun-vie").trim(),
+    from: hhmm("VISIT_FROM", "09:00"),
+    to: hhmm("VISIT_TO", "18:00"),
+  },
+
   checker: {
     concurrency: checkConcurrency,
     timeoutMs: linkCheckTimeoutMs,
-    // % de los SMS con link (elegidos al azar en cada lote de ingesta) que
-    // se encolan para chequear. El resto queda como "skipped".
+    // % de los SMS con link sin politica (elegidos al azar sobre cada
+    // ventana) que se encolan para chequear. El resto queda como "skipped".
     clickPercentage: percentage("CLICK_PERCENTAGE", 100),
   },
 

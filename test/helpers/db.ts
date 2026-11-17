@@ -26,7 +26,7 @@ export async function setupTestDb(): Promise<void> {
 
 export async function resetTables(): Promise<void> {
   assertTestDatabase();
-  for (const table of ["sms_link_checks", "sms_processing", "sync_runs", "sms_content"]) {
+  for (const table of ["sms_link_checks", "sms_processing", "sync_runs", "sms_content", "app_settings", "config_audit", "policies", "edr_captures", "policy_changes"]) {
     await pool.query(`TRUNCATE TABLE ${table}`);
   }
 }

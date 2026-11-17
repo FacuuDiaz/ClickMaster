@@ -3,9 +3,11 @@ import { log, errorMessage } from "../logger";
 import { pool } from "../db/pool";
 import { lastCompletedScheduledEnd } from "../db/syncRunsRepo";
 import { runDueWindows } from "./ingestService";
+import { purgeCaptures } from "../captures/repo";
 
 const RETENTION_EVERY_MS = 60 * 60 * 1000;
 const RETENTION_CHUNK = 5000;
+const CAPTURE_PURGE_EVERY_MS = 10 * 60 * 1000;
 
 /**
  * Scheduler interno: cada SCHEDULER_TICK_SECONDS se fija si hay ventanas
@@ -19,6 +21,8 @@ export class Scheduler {
   private stopped = true;
   private ticking: Promise<void> | null = null;
   private lastRetentionAt = 0;
+  private lastCapturePurgeAt = 0;
+  private lastTick: { at: Date; windows: number; caughtUp: boolean | null; error: string | null } | null = null;
 
   constructor(private readonly onJobsCreated: () => void = () => undefined) {}
 
@@ -35,14 +39,29 @@ export class Scheduler {
   }
 
   async stop(): Promise<void> {
+    if (this.stopped) return;
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     await this.ticking;
+    log.info("scheduler: detenido");
+  }
+
+  status() {
+    return {
+      running: !this.stopped,
+      ticking: this.ticking !== null,
+      tickSeconds: config.scheduler.tickSeconds,
+      windowMinutes: config.scheduler.windowMinutes,
+      lastTick: this.lastTick,
+    };
   }
 
   private schedule(delayMs: number): void {
     if (this.stopped) return;
+    // Un stop()+start() rapido desde la web puede llegar aca con un timer
+    // ya agendado: nunca dos a la vez (y el lock de ingesta cubre el resto).
+    if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.ticking = this.tick().finally(() => {
         this.ticking = null;
@@ -54,13 +73,23 @@ export class Scheduler {
   private async tick(): Promise<void> {
     try {
       const result = await runDueWindows();
+      this.lastTick = { at: new Date(), windows: result?.runs.length ?? 0, caughtUp: result?.caughtUp ?? null, error: null };
       if (result === null) {
         log.debug("scheduler: otra ingesta tiene el lock, se saltea el tick");
       } else if (result.runs.some((r) => r.jobsCreated > 0)) {
         this.onJobsCreated();
       }
     } catch (err) {
+      this.lastTick = { at: new Date(), windows: 0, caughtUp: null, error: errorMessage(err) };
       log.error("scheduler: error en el tick", { error: errorMessage(err) });
+    }
+
+    // Las capturas vencen en horas: se revisan seguido (es un DELETE por indice).
+    if (Date.now() - this.lastCapturePurgeAt > CAPTURE_PURGE_EVERY_MS) {
+      this.lastCapturePurgeAt = Date.now();
+      await purgeCaptures().catch((err) =>
+        log.error("scheduler: error borrando capturas vencidas", { error: errorMessage(err) })
+      );
     }
 
     if (config.scheduler.retentionDays > 0 && Date.now() - this.lastRetentionAt > RETENTION_EVERY_MS) {

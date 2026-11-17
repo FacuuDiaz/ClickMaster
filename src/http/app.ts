@@ -4,7 +4,7 @@ import { z } from "zod";
 import { config } from "../config";
 import { errorMessage, log } from "../logger";
 import { assertDbConnection } from "../db/pool";
-import { runDueWindows, runManualWindow } from "../service/ingestService";
+import { NoActivePolicyError, runDueWindows, runManualWindow } from "../service/ingestService";
 import { processingWorker } from "../worker/processingWorker";
 import { parseApiDate } from "../edr/apiTime";
 import {
@@ -20,6 +20,10 @@ import {
 import { parseClickList } from "../clicker/parseClickList";
 import { reportsRouter } from "./reportsRoutes";
 import { dashboardRouter } from "./dashboardRoutes";
+import { actorFrom, createAdminRouter, type AdminDeps } from "./adminRoutes";
+import { auditBestEffort } from "../db/auditRepo";
+import { policiesRouter } from "./policiesRoutes";
+import { capturesRouter } from "./capturesRoutes";
 
 // public/ queda al lado de dist/ y de src/ (dist/http/app.js -> /app/public).
 const PUBLIC_DIR = path.resolve(__dirname, "../../public");
@@ -49,15 +53,18 @@ const manualWindowSchema = z
   .refine((w) => w.end > w.start, "end tiene que ser posterior a start")
   .refine((w) => w.end.getTime() - w.start.getTime() <= 24 * 60 * 60 * 1000, "la ventana no puede superar 24 h");
 
-const clickJobRequestSchema = z.object({
-  url: z
-    .string()
-    .url()
-    .refine((u) => /^https?:\/\//i.test(u), "La url tiene que ser http(s)"),
-  count: z.number().int().min(1).max(config.clicker.maxCount),
-});
+// Se arma en cada request: el tope (CLICK_JOB_MAX_COUNT) se puede cambiar desde la web.
+function clickJobRequestSchema() {
+  return z.object({
+    url: z
+      .string()
+      .url()
+      .refine((u) => /^https?:\/\//i.test(u), "La url tiene que ser http(s)"),
+    count: z.number().int().min(1).max(config.clicker.maxCount),
+  });
+}
 
-export function createApp() {
+export function createApp(deps: AdminDeps = {}) {
   const app = express();
   app.use(express.json());
   // El dashboard (HTML/JS) no tiene datos: se sirve sin token. Los datos los
@@ -87,6 +94,10 @@ export function createApp() {
           res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join("; ") });
           return;
         }
+        void auditBestEffort(
+          { entity: "action", action: "sync_manual", newValue: { start: parsed.data.start, end: parsed.data.end } },
+          actorFrom(req)
+        );
         const run = await runManualWindow(parsed.data);
         if (!run) {
           res.status(409).json({ error: "Ya hay una ingesta en curso" });
@@ -102,10 +113,18 @@ export function createApp() {
         res.status(409).json({ error: "Ya hay una ingesta en curso" });
         return;
       }
+      if (result.waiting) {
+        res.status(409).json({ error: new NoActivePolicyError().message, waiting: true });
+        return;
+      }
       processingWorker.wake();
       const failed = result.runs.some((r) => r.status === "failed");
       res.status(failed ? 502 : 200).json(result);
     } catch (err) {
+      if (err instanceof NoActivePolicyError) {
+        res.status(409).json({ error: err.message, waiting: true });
+        return;
+      }
       log.error("http: error en /sync", { error: errorMessage(err) });
       res.status(500).json({ status: "error", error: errorMessage(err) });
     }
@@ -120,6 +139,7 @@ export function createApp() {
     try {
       if (force) await processingWorker.pause("recuperacion manual");
       const recovered = await processingWorker.recover({ force });
+      void auditBestEffort({ entity: "action", action: "recover", newValue: { force, recovered } }, actorFrom(req));
       res.json({ recovered, force });
     } catch (err) {
       res.status(500).json({ error: errorMessage(err) });
@@ -130,12 +150,15 @@ export function createApp() {
 
   app.use(reportsRouter);
   app.use(dashboardRouter);
+  app.use(createAdminRouter(deps));
+  app.use(policiesRouter);
+  app.use(capturesRouter);
 
   // Lanza un job que abre `url` `count` veces. Responde enseguida (202);
   // el progreso se consulta con GET /clicks o GET /clicks/:id. Pausa la
   // cola automatica mientras corre (ver clicker/clickJob.ts).
   app.post("/clicks", (req, res) => {
-    const parsed = clickJobRequestSchema.safeParse(req.body);
+    const parsed = clickJobRequestSchema().safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({
         error: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
@@ -148,6 +171,10 @@ export function createApp() {
     }
 
     const job = startClickJob(parsed.data.url, parsed.data.count);
+    void auditBestEffort(
+      { entity: "action", action: "clicks", ref: job.id, newValue: { url: job.url, count: job.total } },
+      actorFrom(req)
+    );
     res.status(202).json(job);
   });
 
@@ -166,6 +193,15 @@ export function createApp() {
     }
 
     const jobs = startClickBatch(parsed.items);
+    void auditBestEffort(
+      {
+        entity: "action",
+        action: "clicks_batch",
+        ref: jobs[0].batch?.id ?? null,
+        newValue: { jobs: jobs.length, totalVisits: jobs.reduce((sum, job) => sum + job.total, 0) },
+      },
+      actorFrom(req)
+    );
     res.status(202).json({
       batchId: jobs[0].batch?.id,
       jobs: jobs.length,
@@ -186,12 +222,16 @@ export function createApp() {
   // Cancela el job en curso y los que esperan en cola: no se lanzan visitas
   // nuevas y las abiertas terminan su sesion. Se puede lanzar otro cuando
   // `current` sea null.
-  app.post("/clicks/cancel", (_req, res) => {
+  app.post("/clicks/cancel", (req, res) => {
     const cancelled = cancelCurrentClickJob();
     if (!cancelled) {
       res.status(404).json({ error: "No hay ningun job de clicks corriendo" });
       return;
     }
+    void auditBestEffort(
+      { entity: "action", action: "clicks_cancel", ref: cancelled.job.id, newValue: { cancelledQueued: cancelled.cancelledQueued } },
+      actorFrom(req)
+    );
     res.json({ ...cancelled.job, cancelledQueued: cancelled.cancelledQueued });
   });
 

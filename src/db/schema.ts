@@ -74,6 +74,36 @@ const SMS_LINK_CHECKS_COLUMNS: { name: string; ddl: string }[] = [
   { name: "worker_id", ddl: "worker_id VARCHAR(64) NULL" },
 ];
 
+// Columnas de sms_processing agregadas despues (tabla propia, nunca sms_content).
+// `backfill`: se corre una sola vez, justo despues de agregar la columna,
+// para que los datos de antes de la migracion no queden en cero.
+const SMS_PROCESSING_COLUMNS: { name: string; ddl: string; backfill?: string }[] = [
+  // Politica que se le asigno al ingestarlo (sin FK: la politica se puede borrar).
+  { name: "policy_id", ddl: "policy_id INT UNSIGNED NULL" },
+  // Clicks realizados sobre el SMS: suma 1 por cada visita a la que el sitio
+  // respondio 200 (errores del sitio y timeouts no cuentan). Pasa de 1 si una politica
+  // nueva lo vuelve a elegir con "cuenta como otro click".
+  {
+    name: "clicks",
+    ddl: "clicks INT UNSIGNED NOT NULL DEFAULT 0",
+    // Las visitas anteriores estan en sms_link_checks: se cuentan sus 200.
+    backfill: `UPDATE sms_processing p
+                 JOIN (SELECT processing_id, COUNT(*) AS n FROM sms_link_checks
+                        WHERE http_status = 200 AND processing_id IS NOT NULL GROUP BY processing_id) c
+                   ON c.processing_id = p.id
+                  SET p.clicks = c.n`,
+  },
+  // Cuando se eligio para visitar (o se volvio a encolar para otro click).
+  // Los topes por hora/dia cuentan por este momento, no por la ingesta: en
+  // "dia vencido" se aprueban hoy SMS que entraron ayer.
+  {
+    name: "selected_at",
+    ddl: "selected_at DATETIME(3) NULL",
+    // Antes se elegian al ingestar: la mejor aproximacion es created_at.
+    backfill: "UPDATE sms_processing SET selected_at = created_at WHERE status <> 'skipped' AND selected_at IS NULL",
+  },
+];
+
 // Indices que se agregan con ALTER si faltan (tablas que pueden venir de
 // una version anterior). Todos sobre tablas auxiliares, nunca sms_content.
 const EXTRA_INDEXES: { table: string; name: string; ddl: string }[] = [
@@ -89,6 +119,13 @@ const EXTRA_INDEXES: { table: string; name: string; ddl: string }[] = [
   },
   // SMS ingestados por tiempo de ingreso (grafico y listado del dashboard).
   { table: "sms_processing", name: "idx_created_at", ddl: "ADD KEY idx_created_at (created_at)" },
+  // Volumen historico por politica (porcentaje relativo a dias anteriores).
+  { table: "sms_processing", name: "idx_policy_edr", ddl: "ADD KEY idx_policy_edr (policy_id, edr_date)" },
+  // Topes por hora/dia de cada politica (por momento de seleccion).
+  { table: "sms_processing", name: "idx_policy_created", ddl: "ADD KEY idx_policy_created (policy_id, created_at)" },
+  { table: "sms_processing", name: "idx_policy_selected", ddl: "ADD KEY idx_policy_selected (policy_id, selected_at)" },
+  // SMS en_seleccion por periodo: se eligen al cerrar la ventana o el dia.
+  { table: "sms_processing", name: "idx_held", ddl: "ADD KEY idx_held (skip_reason, edr_date)" },
 ];
 
 /**
@@ -163,6 +200,115 @@ const CREATE_SYNC_RUNS = `
   );
 `;
 
+/**
+ * Configuracion editable desde la web. Solo guarda lo que se piso: una
+ * clave sin fila toma el valor de .env (o el default). Borrar la fila es
+ * "volver a .env". El valor va como JSON para conservar el tipo.
+ */
+const CREATE_APP_SETTINGS = `
+  CREATE TABLE IF NOT EXISTS app_settings (
+    setting_key  VARCHAR(64)  NOT NULL PRIMARY KEY,
+    value        JSON         NOT NULL,
+    updated_at   DATETIME(3)  NOT NULL,
+    updated_by   VARCHAR(64)  NULL
+  );
+`;
+
+/**
+ * Historial de cambios hechos desde la web (configuracion, politicas,
+ * acciones operativas, capturas). Solo se inserta, nunca se actualiza.
+ * actor es el nombre que escribe el usuario: trazabilidad, no autenticacion.
+ */
+const CREATE_CONFIG_AUDIT = `
+  CREATE TABLE IF NOT EXISTS config_audit (
+    id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    at         DATETIME(3)     NOT NULL,
+    actor      VARCHAR(64)     NULL,
+    ip         VARCHAR(64)     NULL,
+    entity     VARCHAR(16)     NOT NULL,
+    action     VARCHAR(32)     NOT NULL,
+    ref        VARCHAR(128)    NULL,
+    old_value  JSON            NULL,
+    new_value  JSON            NULL,
+    KEY idx_entity_id (entity, id)
+  );
+`;
+
+/**
+ * Politicas de seleccion/visita. Las reglas van en un JSON validado con
+ * zod (src/policies/schema.ts). priority: menor = se evalua antes.
+ */
+const CREATE_POLICIES = `
+  CREATE TABLE IF NOT EXISTS policies (
+    id          INT UNSIGNED  NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name        VARCHAR(100)  NOT NULL,
+    enabled     TINYINT(1)    NOT NULL DEFAULT 1,
+    priority    INT           NOT NULL,
+    rules       JSON          NOT NULL,
+    created_at  DATETIME(3)   NOT NULL,
+    updated_at  DATETIME(3)   NOT NULL,
+    updated_by  VARCHAR(64)   NULL,
+    KEY idx_priority (priority)
+  );
+`;
+
+/**
+ * Copias temporales de respuestas de Alaris (ver src/captures/). El body va
+ * comprimido con gzip (~10x). rows_count y summary se completan al primer
+ * analisis: capturar no agrega un parse extra a la ingesta.
+ * expires_at NULL = conservada (no vence).
+ */
+/**
+ * Cambios de la politica activa en tiempo de ejecucion (activar otra,
+ * desactivarla o editar sus reglas). Cada cambio retoma el contenido del dia
+ * desde period_start (re-asigna y vuelve a elegir); repeat_mode dice que
+ * hacer si se vuelve a elegir un SMS ya clickeado: igual = cuenta el click
+ * hecho, doble = se visita de nuevo (clicks = 2).
+ */
+const CREATE_POLICY_CHANGES = `
+  CREATE TABLE IF NOT EXISTS policy_changes (
+    id              INT UNSIGNED  NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    created_at      DATETIME(3)   NOT NULL,
+    actor           VARCHAR(64)   NULL,
+    from_policy_id  INT UNSIGNED  NULL,
+    to_policy_id    INT UNSIGNED  NULL,
+    from_name       VARCHAR(100)  NULL,
+    to_name         VARCHAR(100)  NULL,
+    repeat_mode     ENUM('igual','doble') NOT NULL,
+    period_start    DATETIME(3)   NOT NULL,
+    status          ENUM('pendiente','aplicando','aplicado','reemplazado','error') NOT NULL,
+    applied_at      DATETIME(3)   NULL,
+    result          JSON          NULL,
+    error           VARCHAR(512)  NULL,
+    KEY idx_status (status),
+    KEY idx_to_period (to_policy_id, period_start)
+  );
+`;
+
+const CREATE_EDR_CAPTURES = `
+  CREATE TABLE IF NOT EXISTS edr_captures (
+    id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    run_id        BIGINT UNSIGNED NULL,
+    origin        VARCHAR(16)     NOT NULL,
+    range_start   DATETIME        NOT NULL,
+    range_end     DATETIME        NOT NULL,
+    request_args  JSON            NOT NULL,
+    error_message VARCHAR(1024)   NULL,
+    rows_count    INT UNSIGNED    NULL,
+    bytes         INT UNSIGNED    NOT NULL,
+    gz_bytes      INT UNSIGNED    NOT NULL,
+    body_gz       LONGBLOB        NOT NULL,
+    summary       JSON            NULL,
+    status        VARCHAR(16)     NOT NULL,
+    note          VARCHAR(255)    NULL,
+    created_at    DATETIME(3)     NOT NULL,
+    created_by    VARCHAR(64)     NULL,
+    expires_at    DATETIME(3)     NULL,
+    KEY idx_expires (expires_at),
+    KEY idx_run (run_id)
+  );
+`;
+
 async function columnExists(table: string, column: string): Promise<boolean> {
   const [rows] = await pool.query<import("mysql2").RowDataPacket[]>(
     `SELECT 1 FROM information_schema.COLUMNS
@@ -190,10 +336,21 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(CREATE_SMS_LINK_CHECKS);
   await pool.query(CREATE_SMS_PROCESSING);
   await pool.query(CREATE_SYNC_RUNS);
+  await pool.query(CREATE_APP_SETTINGS);
+  await pool.query(CREATE_CONFIG_AUDIT);
+  await pool.query(CREATE_POLICIES);
+  await pool.query(CREATE_EDR_CAPTURES);
+  await pool.query(CREATE_POLICY_CHANGES);
 
   for (const column of SMS_LINK_CHECKS_COLUMNS) {
     if (!(await columnExists("sms_link_checks", column.name))) {
       await pool.query(`ALTER TABLE sms_link_checks ADD COLUMN ${column.ddl}`);
+    }
+  }
+  for (const column of SMS_PROCESSING_COLUMNS) {
+    if (!(await columnExists("sms_processing", column.name))) {
+      await pool.query(`ALTER TABLE sms_processing ADD COLUMN ${column.ddl}`);
+      if (column.backfill) await pool.query(column.backfill);
     }
   }
   for (const index of EXTRA_INDEXES) {

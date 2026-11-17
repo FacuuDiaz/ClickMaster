@@ -216,6 +216,8 @@ export async function listSms(params: {
   from: Date;
   to: Date;
   status?: string;
+  // id de politica, o "ninguna" para los que tomaron el porcentaje por defecto.
+  policy?: number | "ninguna";
   cursor?: Cursor;
   limit: number;
 }): Promise<PageResult<Record<string, unknown>>> {
@@ -225,13 +227,19 @@ export async function listSms(params: {
     where.push("p.status = ?");
     args.push(params.status);
   }
+  if (params.policy === "ninguna") {
+    where.push("p.policy_id IS NULL");
+  } else if (params.policy !== undefined) {
+    where.push("p.policy_id = ?");
+    args.push(params.policy);
+  }
   if (params.cursor) {
     where.push("(p.created_at < ? OR (p.created_at = ? AND p.id < ?))");
     args.push(params.cursor.at, params.cursor.at, params.cursor.id);
   }
   // El JOIN a sms_content es por PRIMARY KEY y solo para las filas de la pagina.
   const [rows] = await reportsPool.query<RowDataPacket[]>(
-    `SELECT p.id, p.sms_content_id, p.status, p.skip_reason, p.attempts, p.last_outcome,
+    `SELECT p.id, p.sms_content_id, p.status, p.skip_reason, p.policy_id, p.attempts, p.clicks, p.last_outcome,
             p.last_error, p.edr_date, p.created_at, p.finished_at,
             c.client, c.sender_name, c.status AS sms_status, LEFT(c.text, 300) AS text
        FROM sms_processing p FORCE INDEX (idx_created_at)
@@ -246,7 +254,9 @@ export async function listSms(params: {
     smsContentId: Number(r.sms_content_id),
     status: r.status,
     skipReason: r.skip_reason,
+    policyId: r.policy_id === null ? null : Number(r.policy_id),
     attempts: r.attempts,
+    clicks: Number(r.clicks),
     lastOutcome: r.last_outcome,
     lastError: r.last_error,
     edrDate: r.edr_date,

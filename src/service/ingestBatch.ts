@@ -6,15 +6,18 @@ import {
   updateSmsContent,
 } from "../db/smsContentRepo";
 import { findProcessingIdentities, insertJobs, type NewJob } from "../db/processingRepo";
-import { extractLink } from "../parser/extractLink";
-import { sampleByPercentage } from "../checker/sampleTargets";
 import type { SmsRecord } from "../parser/smsRecordSchema";
+import { factsOf } from "../policies/match";
+import { assign, HELD } from "../policies/select";
+import type { Policy } from "../policies/schema";
 
 export interface BatchResult {
   smsNew: number;
   smsExisting: number;
   jobsCreated: number;
   jobsSkipped: number;
+  // Quedaron en_seleccion: se eligen cuando llega todo el periodo.
+  jobsHeld: number;
 }
 
 /**
@@ -33,7 +36,7 @@ export interface BatchResult {
 export async function persistSmsBatch(
   records: SmsRecord[],
   ingestRunId: number | null,
-  clickPercentage: number,
+  policies: Policy[],
   now: Date
 ): Promise<BatchResult> {
   // Si la misma identidad viene dos veces en el lote gana la ultima (la mas nueva de la API).
@@ -42,7 +45,7 @@ export async function persistSmsBatch(
     byKey.set(messageKey(record.client_message_id, record.vendor_message_id), record);
   }
   const unique = [...byKey.entries()];
-  if (unique.length === 0) return { smsNew: 0, smsExisting: 0, jobsCreated: 0, jobsSkipped: 0 };
+  if (unique.length === 0) return { smsNew: 0, smsExisting: 0, jobsCreated: 0, jobsSkipped: 0, jobsHeld: 0 };
 
   return withTransaction(async (conn) => {
     const identities = unique.map(([, r]) => ({
@@ -78,35 +81,36 @@ export async function persistSmsBatch(
     await updateSmsContent(conn, toUpdate);
 
     // Trabajos para los que no tenian: nuevos + los de la version anterior.
-    const needJob = unknown.map(([key, record]) => ({
-      key,
-      record,
-      smsContentId: (legacy.get(key) ?? inserted.get(key)) as number,
-      link: extractLink(record.text),
-    }));
-    const withLink = needJob.filter((j) => j.link !== null);
-    const sampled = new Set(sampleByPercentage(withLink, clickPercentage).map((j) => j.key));
+    // Aca solo se asigna la politica; cuales se visitan se elige despues,
+    // sobre el total del periodo (src/policies/windowSelect.ts).
+    const decisions = assign(
+      unknown.map(([key, record]) => ({ key, facts: factsOf(record) })),
+      policies
+    );
 
-    const jobs: NewJob[] = needJob.map((j) => {
-      const pending = j.link !== null && sampled.has(j.key);
+    const jobs: NewJob[] = unknown.map(([key, record]) => {
+      const d = decisions.get(key) as NonNullable<ReturnType<typeof decisions.get>>;
       return {
-        smsContentId: j.smsContentId,
-        clientMessageId: j.record.client_message_id,
-        vendorMessageId: j.record.vendor_message_id,
+        smsContentId: (legacy.get(key) ?? inserted.get(key)) as number,
+        clientMessageId: record.client_message_id,
+        vendorMessageId: record.vendor_message_id,
         ingestRunId,
-        edrDate: new Date(j.record.edr_date),
-        status: pending ? "pending" : "skipped",
-        skipReason: pending ? null : j.link === null ? "sin_link" : "fuera_de_muestra",
+        edrDate: new Date(record.edr_date),
+        status: d.status,
+        skipReason: d.skipReason,
+        policyId: d.policyId,
+        nextAttemptAt: null,
       };
     });
     await insertJobs(conn, jobs, now);
 
-    const jobsCreated = jobs.filter((j) => j.status === "pending").length;
+    const jobsHeld = jobs.filter((j) => j.skipReason === HELD).length;
     return {
       smsNew: toInsert.length,
       smsExisting: toUpdate.length,
-      jobsCreated,
-      jobsSkipped: jobs.length - jobsCreated,
+      jobsCreated: 0,
+      jobsSkipped: jobs.length - jobsHeld,
+      jobsHeld,
     };
   }, { retries: 3 });
 }

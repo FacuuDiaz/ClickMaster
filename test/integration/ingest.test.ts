@@ -6,6 +6,8 @@ import { withNamedLock } from "../../src/db/locks";
 import { INGEST_LOCK, ingestWindow, runDueWindows, runManualWindow } from "../../src/service/ingestService";
 import type { EdrRange } from "../../src/fetcher/apiClient";
 import { count, resetTables, rows, setupTestDb } from "../helpers/db";
+import { createPolicy, policiesCache } from "../../src/policies/repo";
+import { policyInputSchema } from "../../src/policies/schema";
 import { rawRecord, syntheticSource } from "../helpers/fixtures";
 
 const T0 = new Date("2026-10-14T12:00:00Z");
@@ -25,6 +27,8 @@ beforeEach(async () => {
   await resetTables();
   config.ingest.dbBatchSize = 7; // lotes chicos para ejercitar varios por ventana
   config.checker.clickPercentage = 100;
+  // Sin politica activa la ingesta queda en espera: una que toma todo al 100%.
+  await createPolicy(policyInputSchema.parse({ name: "todo", enabled: true, rules: { selection: { percentage: 100 } } }), { name: "tester", ip: null });
   config.edr.maxRowsPerRequest = 20000;
   config.edr.minSplitSeconds = 60;
   config.scheduler.overlapMinutes = 0;
@@ -127,6 +131,9 @@ describe("ingesta y persistencia", () => {
   });
 
   test("CLICK_PERCENTAGE manda el resto a skipped fuera_de_muestra", async () => {
+    // El % por defecto aplica a lo que no coincide con la politica activa.
+    await pool.query("UPDATE policies SET rules = JSON_SET(rules, '$.match.clients', JSON_ARRAY('NINGUNO'))");
+    await policiesCache.refresh();
     config.checker.clickPercentage = 0;
     const run = await ingestWindow("manual", win(0, 30), { fetcher: fetcherFrom(syntheticSource(2)) });
     assert.equal(run.jobsCreated, 0);
@@ -142,27 +149,88 @@ describe("ingesta y persistencia", () => {
     assert.match(run.error ?? "", /edr_date/);
   });
 
-  test("respuesta en el tope: parte la ventana y no pierde registros", async () => {
-    config.edr.maxRowsPerRequest = 25;
-    const source = syntheticSource(2);
+  // Alaris corta en `cap` filas, ordenadas como diga `order`.
+  function cappedApi(cap: number, order: "asc" | "desc" | "shuffle", sameSecond = false) {
+    const all = sameSecond
+      ? Array.from({ length: 10 }, (_, i) => rawRecord(500 + i, minutes(3)))
+      : syntheticSource(2)(win(0, 30));
     const requested: EdrRange[] = [];
-    const run = await ingestWindow("manual", win(0, 30), {
-      fetcher: async (r) => {
-        requested.push(r);
-        return source(r).slice(0, 25); // la "API" corta en 25
-      },
-    });
-    assert.equal(run.status, "success");
-    assert.ok(run.apiRequests > 1);
-    assert.equal(await count("SELECT COUNT(*) FROM sms_content"), source(win(0, 30)).length);
+    const t = (r: any) => Date.parse(r.edr_date.replace(/\./g, "-").replace(" ", "T") + "-03:00");
+    const fetcher = async (r: EdrRange) => {
+      requested.push(r);
+      const inRange = all.filter((x) => t(x) >= r.start.getTime() && t(x) <= r.end.getTime());
+      if (order === "desc") inRange.reverse();
+      // Desorden determinista: el ultimo va segundo (con 3+ filas nunca queda ordenado).
+      if (order === "shuffle" && inRange.length > 2) inRange.splice(1, 0, inRange.pop() as (typeof inRange)[number]);
+      return inRange.slice(0, cap) as unknown[];
+    };
+    return { all, requested, fetcher, t };
+  }
+
+  test("respuesta en el tope: pide la pagina siguiente desde el ultimo registro", async () => {
+    config.edr.maxRowsPerRequest = 25;
+    const api = cappedApi(25, "asc");
+    const run = await ingestWindow("manual", win(0, 30), { fetcher: api.fetcher });
+    assert.equal(run.status, "success", run.error ?? "");
+    assert.equal(await count("SELECT COUNT(*) FROM sms_content"), api.all.length);
+    // 61 SMS con tope 25: 3 consultas encadenadas, mismo fin, cada una desde el ultimo de la anterior.
+    assert.equal(run.apiRequests, 3);
+    assert.ok(api.requested.every((r) => r.end.getTime() === minutes(30).getTime()));
+    const page1Last = api.t(api.all[24]);
+    assert.equal(api.requested[1].start.getTime(), page1Last);
+    // Los del segundo de corte no se cuentan dos veces.
+    assert.equal(run.recordsReceived, api.all.length);
+    assert.equal(run.smsExisting, 0);
   });
 
-  test("truncada aun en el rango minimo: la corrida falla en vez de perder datos en silencio", async () => {
-    config.edr.maxRowsPerRequest = 1;
+  test("respuesta en el tope descendente: avanza hacia atras con el mismo inicio", async () => {
+    config.edr.maxRowsPerRequest = 25;
+    const api = cappedApi(25, "desc");
+    const run = await ingestWindow("manual", win(0, 30), { fetcher: api.fetcher });
+    assert.equal(run.status, "success", run.error ?? "");
+    assert.equal(await count("SELECT COUNT(*) FROM sms_content"), api.all.length);
+    assert.equal(run.apiRequests, 3);
+    assert.ok(api.requested.every((r) => r.start.getTime() === minutes(0).getTime()));
+  });
+
+  test("respuesta en el tope desordenada: respaldo partiendo en mitades, sin perder registros", async () => {
+    config.edr.maxRowsPerRequest = 25;
+    const api = cappedApi(25, "shuffle");
+    const run = await ingestWindow("manual", win(0, 30), { fetcher: api.fetcher });
+    assert.equal(run.status, "success", run.error ?? "");
+    assert.equal(await count("SELECT COUNT(*) FROM sms_content"), api.all.length);
+    assert.ok(api.requested.some((r) => r.end.getTime() < minutes(30).getTime()), "tiene que haber partido el rango");
+  });
+
+  test("mas registros en un mismo segundo que el tope: falla en vez de perder datos", async () => {
+    config.edr.maxRowsPerRequest = 5;
+    const api = cappedApi(5, "asc", true);
+    const run = await ingestWindow("manual", win(3, 30), { fetcher: api.fetcher });
+    assert.equal(run.status, "failed");
+    assert.match(run.error ?? "", /mismo segundo/);
+  });
+
+  test("desordenada aun en el rango minimo: la corrida falla en vez de perder datos en silencio", async () => {
+    config.edr.maxRowsPerRequest = 3;
     config.edr.minSplitSeconds = 600;
-    const run = await ingestWindow("manual", win(0, 30), { fetcher: fetcherFrom(syntheticSource(2)) });
+    const api = cappedApi(3, "shuffle");
+    const run = await ingestWindow("manual", win(0, 30), { fetcher: api.fetcher });
     assert.equal(run.status, "failed");
     assert.match(run.error ?? "", /truncada/);
+  });
+
+  test("corte de seguridad: no pide mas paginas que EDR_MAX_PAGES_PER_WINDOW", async () => {
+    config.edr.maxRowsPerRequest = 5;
+    config.edr.maxPagesPerWindow = 2;
+    try {
+      const api = cappedApi(5, "asc");
+      const run = await ingestWindow("manual", win(0, 30), { fetcher: api.fetcher });
+      assert.equal(run.status, "failed");
+      assert.match(run.error ?? "", /paginas/);
+      assert.equal(api.requested.length, 2);
+    } finally {
+      config.edr.maxPagesPerWindow = 50;
+    }
   });
 });
 
