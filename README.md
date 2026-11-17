@@ -104,6 +104,190 @@ si está vacío arranca por la última ventana cerrada (no hace backfill).
 `REPORTS_DB_USER`/`REPORTS_DB_PASSWORD` permiten usar un usuario de MySQL
 de solo lectura para el dashboard (opcional: la sesión igual es `READ ONLY`).
 
+## Administración desde la web
+
+La misma página tiene secciones (sidebar a la izquierda). Todas usan el mismo
+`ADMIN_TOKEN` opcional que el resto de los endpoints. "Tu nombre" (abajo a
+la izquierda) queda en el historial de cambios: es trazabilidad, no autenticación.
+
+Arriba del sidebar se elige la **vista**:
+
+- **Básica** (la de arranque): solo **Panel** y **Reportes**. El Panel muestra
+  en una pantalla si está corriendo, un botón **Iniciar/Detener** (pausa o
+  reanuda ingesta y worker juntos, igual que en Operación), la petición a
+  Alaris (producto, país, cada cuánto se consulta y porcentaje a visitar) y
+  "pedir un rango ahora" (`/sync`).
+- **Avanzada**: todas las secciones de abajo (y también el Panel).
+
+La vista se recuerda por navegador (`localStorage`). **No es un control de
+acceso**: cualquiera puede pasar a la avanzada; lo único que protege la
+administración sigue siendo `ADMIN_TOKEN` y publicar la app solo en 127.0.0.1.
+
+| Sección | Qué permite |
+|---|---|
+| **Panel** | Lo básico en una pantalla (ver arriba) |
+| **Configuración** | Editar en caliente fuente Alaris (URL, producto, país, args extra, timeouts, tope de filas), cada cuánto se consulta a Alaris (tamaño de ventana), ingesta automática, worker, porcentaje por defecto, clicks y capturas. Muestra de dónde sale cada valor (web / `.env` / default) y permite volver al de `.env`. Credenciales, base, puerto y zona horaria siguen solo en `.env` (sección **Entorno**) |
+| **Políticas** | Reglas de qué SMS visitar, cuántos, cuándo y cómo (ver abajo), con vista previa sobre las últimas horas |
+| **Capturas** | Respuestas de Alaris guardadas temporalmente: resumen, registros, simular políticas, reprocesar, conservar o descartar |
+| **Operación** | Pausar/reanudar ingesta y worker (queda guardado), pedir una ventana a mano, recuperar reservas y lanzar/seguir/cancelar clicks manuales |
+| **Historial** | Quién cambió qué y cuándo (configuración, políticas, acciones, capturas) |
+
+**Fuente Alaris por variables o por curl:** en Configuración → Fuente Alaris
+se puede editar campo por campo o ver/editar la petición completa como un
+`curl` (URL, método, cursor, producto, país, argumentos extra, `--max-time`
+y `--retry`). Las dos vistas editan lo mismo y se guardan juntas. Las fechas
+(`<inicio>`/`<fin>`) las pone la ingesta y la credencial sale de `.env`.
+
+**Entorno (.env):** lo que solo se cambia en `.env` se puede ver por
+variables (tarjetas con explicación) o como archivo `.env` (solo lectura,
+secretos ocultos, las que no están en el archivo aparecen comentadas con su
+default).
+
+**Cada cuánto se consulta a Alaris:** es el tamaño de ventana
+(`EDR_WINDOW_MINUTES`, editable: 5, 10, 15, 20, 30 min, 1 a 12 h o 1 día).
+Se hace una consulta por ventana apenas cierra más el margen. Al cambiarlo,
+la ventana siguiente se recorta hasta el próximo borde alineado: no quedan
+huecos ni rangos repetidos.
+
+**Precedencia de la configuración:** base (`app_settings`) > `.env` > default.
+Lo guardado desde la web se aplica sin reiniciar; con varias instancias,
+cada una relee la tabla cada 30 s.
+
+### Políticas
+
+Se evalúan por prioridad y **gana la primera que coincide**. Un SMS con
+link que no coincide con ninguna usa el porcentaje por defecto
+(`CLICK_PERCENTAGE`, al azar sobre cada ventana).
+
+**Primero llega todo, después se elige.** Durante la ingesta cada SMS nuevo
+queda `skipped` con `skip_reason = en_seleccion` y su `policy_id`. Cuando el
+período llegó completo (`src/policies/windowSelect.ts`) se elige cuáles
+visitar: los elegidos pasan a `pending` y el resto a `fuera_de_muestra` (o
+`tope_politica`). Si algo falla, siguen `en_seleccion` y se eligen en el
+reintento de la ventana o en el barrido de días cerrados de cada chequeo del
+scheduler.
+
+Cada política define:
+
+- **Qué SMS toma:** listas de clientes, senders, países, redes, MCC/MNC,
+  vendors y dominios del link (`*.dominio.com` incluye subdominios). Vacío = todos.
+- **Cuántos visita** (`no visitar`, o un X % sobre una base):
+  - **De cada ventana:** X % de los SMS de la ventana, elegido al terminar de ingestarla.
+  - **Día vencido:** X % de todos los SMS del día anterior, elegidos entre los
+    SMS de ese día cuando el día cerró. Los de hoy no se visitan hasta mañana.
+  - **Mismo día de la semana anterior:** cuota del día = X % del total del
+    mismo día de la semana anterior (o el promedio de 1-4 semanas). Se visita
+    entre los SMS de hoy, repartida en las ventanas del día según la
+    estrategia. Sin datos de esa semana usa X % de cada ventana. La referencia
+    se cuenta por `policy_id`; si la política es nueva y toma todos los SMS, se
+    usa el total de SMS con link.
+- **Cuáles visita (estrategia),** sobre los SMS del período ordenados por
+  `edr_date` (`src/policies/strategies.ts`): intercalado (parejo), aleatorio,
+  primeros, últimos, progresivo (más seguidos hacia el final), regresivo (al
+  revés) y fibonacci (saltos 1,1,2,3,5,8 que se reinician). El editor muestra
+  un ejemplo de cada una (`GET /admin/policies/strategies`).
+- **Cuándo:** días y franjas horarias (hora de Alaris). Fuera de horario el
+  SMS queda `pending` con `next_attempt_at` en la próxima franja.
+- **Topes:** máximo de aprobados por hora y por día; el excedente queda
+  `skipped` con `skip_reason = tope_politica`.
+- **Cómo visita:** permanencia, timeout, intentos máximos y bloqueo de
+  recursos (pisan a los globales).
+
+**Una sola activa.** Prender una apaga la que estaba (también lo garantiza el
+servidor: `setActivePolicy`, y al arrancar `ensureSingleActive` deja solo la
+primera si había varias). **Sin ninguna activa el sistema queda en espera:**
+la ingesta automática y la manual (`/sync`, reprocesar y pedir capturas → 409) no le
+piden nada a Alaris, no se elige nada (ni día vencido ni retome) y el worker no
+toma SMS de la cola. Las ventanas no se saltean: al activar una, la ingesta
+retoma desde el cursor. `/admin/status` lo muestra en `policy.active = null` y
+`worker.waiting = "sin_politica"`. Los clicks manuales de una URL (no son SMS)
+siguen funcionando. Con una activa, los SMS que no coinciden con ella usan la
+regla por defecto.
+
+**Cambios en ejecución.** Activar otra, desactivar la activa, borrarla o
+editar sus reglas registra un cambio en `policy_changes` y lo aplica en
+segundo plano (`src/policies/retake.ts`, con el lock de ingesta) sobre **todo
+el contenido del día en curso** (desde las 00:00, hora de Alaris):
+
+1. Re-asigna los SMS de hoy (leyendo `sms_content`) a la política nueva. Los
+   salteados vuelven a `en_seleccion`; lo que ya está en cola o clickeado
+   conserva su estado.
+2. Vuelve a elegir las ventanas de hoy que ya llegaron (base "día vencido": se
+   elige mañana al cerrar el día, sobre todos los SMS de hoy).
+
+Antes de confirmar, la web muestra un aviso para elegir qué pasa si la regla
+nueva vuelve a elegir un SMS ya clickeado (`repeat_mode`):
+
+- **Cuenta igual** (`igual`): no se visita de nuevo; ese click cuenta para la cuota.
+- **Cuenta como otro click** (`doble`): vuelve a la cola (`attempts = 0`) y se
+  visita otra vez.
+
+`sms_processing.clicks` guarda los **clicks realizados** de cada SMS: suma 1
+por cada visita a la que el sitio respondió **200** (la respuesta final,
+después de las redirecciones). Un error del sitio (404, 500…), un timeout o un
+DNS caído no cuentan (el intento igual queda en `sms_link_checks`). Un SMS
+re-clickeado queda con 2. Si la regla nueva elige un SMS visitado que nunca
+tuvo un 200 (`clicks = 0`), se vuelve a intentar en cualquier modo. Se ve en Reportes → Registros (columna Clicks).
+
+**Redondeo con arrastre.** La cantidad de cada ventana se calcula sobre el
+acumulado del día de la política (`carriedCount`): 10 ventanas de 2 SMS al
+20 % dan 4 visitas en el día, no 0.
+
+Los topes por hora/día cuentan por el momento en que se eligió el SMS
+(`sms_processing.selected_at`), no por cuándo se ingestó: así "día vencido" y
+el retome del día los respetan. Una política creada sin `enabled` nace
+apagada. La vista previa estima como si la política en edición fuera la activa.
+
+**Panel (vista básica):** además de la petición a Alaris, permite elegir la
+política activa (o "ninguna": en espera) y cambiar su porcentaje; activar otra
+o cambiar el porcentaje pasa por el mismo aviso de cambio en ejecución.
+
+Endpoints: `POST /admin/policies/active {id|null, repeatMode}`,
+`GET /admin/policies/changes`; `POST`/`PUT`/`DELETE` de políticas aceptan
+`repeatMode` y devuelven `changeId` si fue un cambio en ejecución.
+
+**Políticas de fábrica.** La primera vez (tabla vacía y sin historial de
+políticas) se cargan tres, todas sobre todos los SMS, al 20 % e intercaladas:
+de cada ventana (activa), día vencido y mismo día de la semana anterior
+(apagadas: como toman todo, solo cuenta la primera activa). Si se borran
+todas, la lista ofrece volver a cargarlas (`POST /admin/policies/defaults`).
+
+**Horario de visitas global** (Configuración → Horario de visitas,
+`VISIT_HOURS_ENABLED`, `VISIT_DAYS`, `VISIT_FROM`, `VISIT_TO`): fuera de él el
+worker no toma SMS de la cola. No frena la ingesta ni la selección ni los
+clicks manuales. Se suma al horario propio de cada política.
+
+### Cumplimiento (Reportes → Cumplimiento)
+
+Por día (de los SMS, hora de Alaris) y por política: **objetivo** contra
+**SMS clickeados** (con al menos un 200), con el desglose de lo que falta (en
+cola, en selección, recortados por tope, visitados sin 200, sin elegir).
+
+- Objetivo con las reglas actuales de la política: *por ventana* y *por
+  defecto* = X % de los SMS del día; *día vencido* = X % de los SMS del día,
+  que se eligen y visitan al día siguiente; *semana anterior* = X % del mismo
+  día de la semana anterior.
+- Plazo: fin del día (día vencido: fin del día siguiente). Si al ritmo del
+  worker en la última hora la cola no termina dentro de las horas de visita que
+  quedan (respeta el horario global), aparece un aviso.
+- "Ver avance por hora": elegidos y clickeados acumulados contra el objetivo
+  (con tabla de datos).
+- Endpoints (pool de reportes, solo lectura, con caché; los días cerrados se
+  cachean 10 min): `GET /dashboard/compliance?days=7`,
+  `GET /dashboard/compliance/hourly?day=AAAA-MM-DD&policy=<id|ninguna>`.
+- Al migrar, `clicks` se completa desde los 200 de `sms_link_checks` y
+  `selected_at` con `created_at` (una sola vez, al agregar cada columna).
+
+### Capturas de Alaris
+
+`EDR_CAPTURE_MODE` (editable desde la web): `off`, `errores` (default:
+respuestas que fallan + registros inválidos de corridas `partial`) o `todas`
+(cada respuesta completa, ~5 MB comprimidos y ~1 s de CPU por ventana).
+Vencen a las `EDR_CAPTURE_RETENTION_HOURS` (las conservadas no) y se borran
+las más viejas si pasan de `EDR_CAPTURE_MAX_TOTAL_MB`. Nunca guardan el
+auth. También se puede **pedir y capturar un rango** sin ingestarlo.
+Reprocesar una captura es igual que una ventana manual: idempotente.
+
 ## Comandos de operación
 
 | Comando | Qué hace |
@@ -141,6 +325,9 @@ publicada solo en `127.0.0.1:3000`.
 | `GET /processing/jobs/:id` | Trabajo + SMS + historial de intentos |
 | `POST /processing/recover` | `{"force": true}` opcional |
 | `/clicks...` | Clicks manuales (abajo) |
+| `GET/PUT /admin/settings`, `GET /admin/status`, `POST /admin/actions/{scheduler,worker}/{pause,resume}`, `GET /admin/audit` | Configuración, estado, acciones e historial |
+| `GET/POST /admin/policies`, `PUT/DELETE /admin/policies/:id`, `POST /admin/policies/reorder`, `POST /admin/policies/preview` | Políticas |
+| `GET/POST /admin/captures`, `GET/DELETE /admin/captures/:id`, `GET .../rows`, `POST .../simulate`, `.../reprocess`, `.../keep` | Capturas |
 
 La paginación es por keyset: cada respuesta trae `nextBeforeId`, que se
 pasa como `beforeId` para la página siguiente (`null` = no hay más).
@@ -191,20 +378,41 @@ no avanza).
   copia completa: los registros se validan con Zod **de a lotes**
   (`INGEST_DB_BATCH_SIZE`) y el array original se va vaciando a medida que
   se persiste, así el GC libera la respuesta mientras se procesa.
-- **Tope de filas confirmado: Alaris corta en 20.000 filas** y no por orden
-  de fecha. Con el producto 1286, `2026.10.02 00:45:00`–`00:46:30` trajo
-  20.000 justas, todas de una ráfaga de ~36 s (más de 20.000 SMS en ese
-  lapso), en ~40 s y ~40 MB. Si una respuesta llega a `EDR_MAX_ROWS_PER_REQUEST`, se descarta y
-  el rango se pide en dos mitades, recursivamente, hasta
-  `EDR_MIN_SPLIT_SECONDS`. Si incluso ese rango mínimo llega al tope, la
-  corrida falla con un error explícito en vez de perder datos en silencio.
-  Con `EDR_MIN_SPLIT_SECONDS=1`, una ventana de 30 min con una ráfaga así
-  se resuelve en ~11 pedidos (5 en el tope, que se descartan), unos 4
-  minutos (`make test-volume`, escenario "rafaga").
+- **Tope de filas: Alaris corta en 20.000 filas por consulta.** Con el
+  producto 1286, `2026.10.02 00:45:00`–`00:46:30` trajo 20.000 justas, todas
+  de una ráfaga de ~36 s, en ~40 s y ~40 MB. Si una respuesta llega a
+  `EDR_MAX_ROWS_PER_REQUEST`:
+  - **Ordenada por fecha**: la app manda siempre
+    `orderby_clause: "edr_date asc"` (según la
+    [doc de la EAPI](https://eapi.demo.alarislabs.com/eapi/others.html), sin
+    ese argumento "sorting is disabled" y el orden no está garantizado;
+    también soporta descendente). Se procesa y se pide
+    la página siguiente **desde la fecha del último registro hasta el mismo
+    fin** (descendente: mismo inicio hasta esa fecha). 60.000 SMS en 30 min
+    = 3 consultas. Los registros del segundo de corte vuelven a llegar y se
+    descartan por identidad. Tope de páginas por rango:
+    `EDR_MAX_PAGES_PER_WINDOW` (50).
+  - **Desordenada** (no debería pasar; red de seguridad): no hay un "último" confiable, así que se descarta y el
+    rango se pide en dos mitades hasta `EDR_MIN_SPLIT_SECONDS` (respaldo:
+    más lento, correcto con cualquier orden). Queda un `warn` en el log.
+  - Si en un mismo segundo hay más registros que el tope (o la respuesta
+    desordenada sigue en el tope en el rango mínimo), la corrida falla con un
+    error explícito y se reintenta: nunca se pierden datos en silencio.
+  - Ráfaga de 25.030 SMS con tope 20.000 (`make test-volume`): 2 consultas
+    (partiendo en mitades eran 11).
 - Prueba de volumen (`make test-volume`, 20.000 SMS sintéticos, MySQL local):
   ~2,3 s de ingesta, 325 consultas SQL (40 lotes de 500), pico de heap de
   ~80 MB. Una re-ingesta solapada no crea nada. Reclamar 16 trabajos con
   18.000 pendientes tarda ~4 ms.
+
+**Lo que dice la doc de `get_sms_edr`** ([others.html](https://eapi.demo.alarislabs.com/eapi/others.html)):
+no tiene paginación propia (sin `first_rec`/`rec_count`), no documenta el
+tope de filas, si `end_date` es inclusivo ni la zona horaria. Tiene más
+filtros que se pueden sumar en "Argumentos extra" (o en el curl): `is_last`,
+`src_is_successful`, `dst_is_successful`, `vendor_product_id`, `edr_type`,
+`status`/`op_status`, `sender_name`, `mccmnc`, `network`, `code_word`, etc.
+Los operadores `op_*` aceptan `==`, `!=`, `>`, `<`, `>=`, `<=`, `=@`
+(contiene), `!@`, `=~` (regex) y `!~`.
 
 ### Persistencia de SMS e identidad
 
@@ -327,7 +535,8 @@ error lleva `"alert": true`.
 ## Configuración
 
 Todas las variables, con su default y explicación, están en `.env.example`.
-Las principales:
+La mayoría se puede pisar desde la web (sección Configuración) sin
+reiniciar. Las principales:
 
 | Variable | Default | Para qué |
 |---|---|---|
@@ -335,14 +544,15 @@ Las principales:
 | `EDR_CLIENT_PRODUCT_ID`, `EDR_COUNTRY` | vacío | Filtros del request (si están vacíos no se mandan) |
 | `EDR_TIMEZONE_OFFSET` | `-03:00` | Zona de las fechas de la API |
 | `EDR_WINDOW_MINUTES` / `EDR_SAFETY_DELAY_MINUTES` / `EDR_OVERLAP_MINUTES` | 30 / 5 / 0 | Ventanas |
-| `EDR_MAX_ROWS_PER_REQUEST` / `EDR_MIN_SPLIT_SECONDS` | 20000 / 1 | Tope de la API y partición de ventanas (0 = sin tope, no parte nunca) |
+| `EDR_MAX_ROWS_PER_REQUEST` / `EDR_MAX_PAGES_PER_WINDOW` / `EDR_MIN_SPLIT_SECONDS` | 20000 / 50 / 1 | Tope de la API; al llegar se pide la página siguiente desde el último registro (0 = sin tope). Rango mínimo solo para respuestas desordenadas |
 | `EDR_HTTP_TIMEOUT_MS` / `EDR_MAX_RETRIES` | 600000 / 1 | Tiempo máximo para recibir la respuesta completa de Alaris (puede tardar minutos) / reintentos |
 | `INGEST_DB_BATCH_SIZE` | 500 | Filas por transacción (máx. 2000) |
 | `CHECK_CONCURRENCY` | 4 | Sesiones de Chromium simultáneas (worker y clicks) |
 | `LINK_CHECK_TIMEOUT_MS` | 15000 | Timeout de cada visita |
 | `WORKER_CLAIM_BATCH_SIZE` / `WORKER_LEASE_MS` | 2×concurrencia / 5 min | Lote reclamado y duración de la reserva |
 | `JOB_MAX_ATTEMPTS` / `JOB_RETRY_BASE_DELAY_MS` | 3 / 60000 | Reintentos |
-| `CLICK_PERCENTAGE` | 100 | % de SMS con link que se encolan (muestra al azar por lote) |
+| `CLICK_PERCENTAGE` | 100 | % de SMS con link que se encolan cuando no coinciden con ninguna política (muestra al azar por lote) |
+| `EDR_CAPTURE_MODE` / `EDR_CAPTURE_RETENTION_HOURS` / `EDR_CAPTURE_MAX_TOTAL_MB` | errores / 24 / 500 | Capturas de respuestas de Alaris |
 | `RESULTS_RETENTION_DAYS` | 0 | Purga de `sms_link_checks` y `sync_runs`; `sms_processing` nunca se purga |
 | `SCHEDULER_ENABLED` / `WORKER_ENABLED` | true | Para apagar una de las dos partes |
 | `ADMIN_TOKEN` | vacío | Bearer para los endpoints |
@@ -355,6 +565,10 @@ Las principales:
 | `sms_processing` | esta app | Identidad (UNIQUE `client_message_id, vendor_message_id`) + estado del trabajo |
 | `sms_link_checks` | esta app | Un registro por intento. Se migra con `ALTER ... ADD COLUMN` solo si faltan columnas (aditivo) |
 | `sync_runs` | esta app | Una fila por corrida de ingesta (ventana, contadores, estado, error) |
+| `app_settings` | esta app | Configuración pisada desde la web (solo las claves editadas) |
+| `config_audit` | esta app | Historial de cambios y acciones hechas desde la web |
+| `policies` | esta app | Políticas; las reglas van en un JSON validado con zod |
+| `edr_captures` | esta app | Respuestas de Alaris guardadas temporalmente (gzip) |
 
 Todo lo auxiliar se crea o migra al arrancar (`src/db/schema.ts`), de
 forma aditiva e idempotente. No hay FK a `sms_content` a propósito: no
