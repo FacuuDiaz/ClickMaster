@@ -9,279 +9,745 @@
 <!-- Dark Reader y similares reescriben los colores de los graficos; la pagina
      ya trae su propio modo oscuro validado. -->
 <meta name="darkreader-lock">
-<title>ClickMaster · Reportes</title>
-<style>
-  :root {
-    color-scheme: light;
-    --page: #f9f9f7;
-    --surface: #fcfcfb;
-    --text-primary: #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted: #898781;
-    --grid: #e1e0d9;
-    --axis: #c3c2b7;
-    --border: rgba(11, 11, 11, 0.10);
-    --wash: rgba(11, 11, 11, 0.04);
-    --accent: #2a78d6;
-    --s1: #2a78d6; /* cargada */
-    --s2: #eb6834; /* error del sitio */
-    --s3: #1baf7a; /* indeterminado */
-    --s4: #eda100; /* error tecnico */
-    --good: #006300;
-    --critical: #d03b3b;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:where(:not([data-theme="light"])) {
-      color-scheme: dark;
-      --page: #0d0d0d;
-      --surface: #1a1a19;
-      --text-primary: #f0efec;
-      --text-secondary: #c3c2b7;
-      --text-muted: #898781;
-      --grid: #2c2c2a;
-      --axis: #383835;
-      --border: rgba(255, 255, 255, 0.10);
-      --wash: rgba(255, 255, 255, 0.05);
-      --accent: #3987e5;
-      --s1: #3987e5;
-      --s2: #d95926;
-      --s3: #199e70;
-      --s4: #c98500;
-      --good: #0ca30c;
-      --critical: #e66767;
-    }
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --page: #0d0d0d;
-    --surface: #1a1a19;
-    --text-primary: #f0efec;
-    --text-secondary: #c3c2b7;
-    --text-muted: #898781;
-    --grid: #2c2c2a;
-    --axis: #383835;
-    --border: rgba(255, 255, 255, 0.10);
-    --wash: rgba(255, 255, 255, 0.05);
-    --accent: #3987e5;
-    --s1: #3987e5;
-    --s2: #d95926;
-    --s3: #199e70;
-    --s4: #c98500;
-    --good: #0ca30c;
-    --critical: #e66767;
-  }
-
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--page);
-    color: var(--text-primary);
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  .wrap { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
-  header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin-bottom: 20px; }
-  h1 { font-size: 20px; font-weight: 600; margin: 0; }
-  h1 small { font-weight: 400; color: var(--text-secondary); font-size: 14px; margin-left: 6px; }
-  .meta { color: var(--text-muted); font-size: 13px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-  .meta label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
-
-  /* Filtros: una fila arriba de todo lo que scopean */
-  .filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 20px; }
-  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
-  .seg button { border: 0; background: none; color: var(--text-secondary); padding: 7px 12px; font: inherit; cursor: pointer; }
-  .seg button + button { border-left: 1px solid var(--border); }
-  .seg button:hover { background: var(--wash); }
-  .seg button[aria-pressed="true"] { color: var(--text-primary); font-weight: 600; background: var(--wash); }
-  .custom { display: none; gap: 6px; align-items: center; flex-wrap: wrap; }
-  .custom.show { display: inline-flex; }
-  input, select, .btn {
-    font: inherit; color: var(--text-primary); background: var(--surface);
-    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
-  }
-  .btn { cursor: pointer; }
-  .btn:hover:not(:disabled) { background: var(--wash); }
-  .btn:disabled { color: var(--text-muted); cursor: default; }
-  .range-label { color: var(--text-muted); font-size: 13px; }
-
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
-  .grid-kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
-  .kpi .label { color: var(--text-secondary); font-size: 13px; }
-  .kpi .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
-  .kpi .sub { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
-  .kpi.hero .value { font-size: 48px; line-height: 1.05; }
-  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
-  .status-row { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 8px; }
-  .status-row div { font-size: 13px; color: var(--text-secondary); }
-  .status-row b { color: var(--text-primary); font-size: 18px; font-weight: 600; margin-right: 4px; }
-  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
-  .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
-  .pill.ok::before { background: var(--good); }
-  .pill.bad::before { background: var(--critical); }
-  .pill.ok { color: var(--good); }
-  .pill.bad { color: var(--critical); }
-
-  .charts { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 12px; }
-  .charts .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .chart-card h2 { font-size: 15px; font-weight: 600; margin: 0; }
-  .chart-card .desc { color: var(--text-muted); font-size: 12px; margin: 2px 0 8px; }
-  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 8px; padding: 0; list-style: none; font-size: 13px; color: var(--text-secondary); }
-  .legend li { display: inline-flex; align-items: center; gap: 6px; }
-  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-  .chart { position: relative; width: 100%; }
-  .chart svg { display: block; width: 100%; overflow: visible; }
-  .chart svg:focus { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
-  .loading .chart, .loading .grid-kpi, .loading .row2, .loading .tbl-wrap { opacity: 0.55; transition: opacity .15s; }
-  .tick { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-  .tooltip {
-    position: absolute; pointer-events: none; z-index: 5; min-width: 150px;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0,0,0,.12); padding: 8px 10px; font-size: 12px; display: none;
-  }
-  .tooltip .tt-title { color: var(--text-muted); margin-bottom: 4px; }
-  .tooltip .tt-row { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-  .tooltip .tt-row b { font-variant-numeric: tabular-nums; min-width: 42px; text-align: right; }
-  .tooltip .tt-row span { color: var(--text-secondary); }
-  .tooltip .key { width: 12px; height: 2px; border-radius: 1px; display: inline-block; }
-  details.data { margin-top: 6px; font-size: 13px; }
-  details.data summary { color: var(--text-secondary); cursor: pointer; }
-  details.data .scroll { max-height: 240px; overflow: auto; margin-top: 6px; }
-  .empty { color: var(--text-muted); font-size: 13px; padding: 24px 0; text-align: center; }
-
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: -4px -4px 12px; }
-  .tabs button { border: 0; background: none; font: inherit; color: var(--text-secondary); padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-  .tabs button[aria-selected="true"] { color: var(--text-primary); font-weight: 600; border-bottom-color: var(--accent); }
-  .tbl-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-  .tbl-wrap { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
-  th { color: var(--text-muted); font-weight: 500; white-space: nowrap; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  td.time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
-  td.link { max-width: 340px; overflow-wrap: anywhere; }
-  td.text { max-width: 420px; overflow-wrap: anywhere; color: var(--text-secondary); }
-  .tag { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-  .tag i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
-  .err { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
-  .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; color: var(--text-muted); font-size: 13px; }
-  .banner { display: none; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }
-  .banner.show { display: block; }
-  .banner.error { border-color: var(--critical); }
-  .token-form { display: none; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
-  .token-form.show { display: flex; }
-
-  @media (max-width: 860px) {
-    .row2, .charts .pair { grid-template-columns: 1fr; }
-    .kpi.hero .value { font-size: 40px; }
-  }
-</style>
+<title>ClickMaster</title>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="wrap" id="app">
-  <header>
-    <h1>ClickMaster <small>verificacion de links de SMS</small></h1>
-    <div class="meta">
-      <span id="updated">—</span>
-      <label><input type="checkbox" id="auto" checked> Actualizar cada 30 s</label>
+<div class="layout" id="app">
+  <!-- Sidebar: secciones y sus pestanas (lo arma common.js) -->
+  <aside class="sidebar" id="sidebar" aria-label="Navegacion">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">CM</div>
+      <div><b>ClickMaster</b><span>verificacion de links de SMS</span></div>
     </div>
-  </header>
-
-  <div class="banner" id="banner" role="status">
-    <span id="banner-text"></span>
-    <form class="token-form" id="token-form">
-      <input type="password" id="token" placeholder="ADMIN_TOKEN" autocomplete="off" aria-label="Token de administrador">
-      <button class="btn" type="submit">Entrar</button>
-    </form>
-  </div>
-
-  <div class="filters" role="group" aria-label="Rango de tiempo">
-    <div class="seg" id="presets">
-      <button type="button" data-preset="30m" aria-pressed="true">30 min</button>
-      <button type="button" data-preset="1h" aria-pressed="false">1 h</button>
-      <button type="button" data-preset="6h" aria-pressed="false">6 h</button>
-      <button type="button" data-preset="24h" aria-pressed="false">24 h</button>
-      <button type="button" data-preset="7d" aria-pressed="false">7 dias</button>
-      <button type="button" data-preset="custom" aria-pressed="false">Personalizado</button>
-    </div>
-    <form class="custom" id="custom">
-      <input type="datetime-local" id="from" aria-label="Desde" required>
-      <span class="range-label">a</span>
-      <input type="datetime-local" id="to" aria-label="Hasta" required>
-      <button class="btn" type="submit">Aplicar</button>
-    </form>
-    <span class="range-label" id="range-label"></span>
-  </div>
-
-  <section class="grid-kpi" aria-label="Resumen del rango">
-    <div class="card kpi hero"><div class="label">Paginas cargadas</div><div class="value" id="k-rate">—</div><div class="sub" id="k-rate-sub">del total de verificaciones</div></div>
-    <div class="card kpi"><div class="label">Verificaciones</div><div class="value" id="k-checks">—</div><div class="sub">intentos en el rango</div></div>
-    <div class="card kpi"><div class="label">Error del sitio</div><div class="value" id="k-sitio">—</div><div class="sub">4xx, 5xx, certificado…</div></div>
-    <div class="card kpi"><div class="label">Error tecnico</div><div class="value" id="k-tecnico">—</div><div class="sub">timeout, DNS, conexion…</div></div>
-    <div class="card kpi"><div class="label">Tiempo de carga</div><div class="value" id="k-load">—</div><div class="sub">promedio de las cargadas</div></div>
-    <div class="card kpi"><div class="label">SMS ingestados</div><div class="value" id="k-sms">—</div><div class="sub">entraron a la cola en el rango</div></div>
-  </section>
-
-  <section class="row2">
-    <div class="card">
-      <div class="kpi"><div class="label">Cola ahora</div></div>
-      <div class="status-row">
-        <div><b id="q-pending">—</b>pendientes</div>
-        <div><b id="q-processing">—</b>en proceso</div>
-        <div><b id="q-retry">—</b>para reintentar</div>
-        <div><b id="q-lag">—</b>de atraso</div>
+    <div class="ui-mode">
+      <div class="seg" id="ui-mode" role="group" aria-label="Vista">
+        <button type="button" data-ui="basica" aria-pressed="true">Basica</button>
+        <button type="button" data-ui="avanzada" aria-pressed="false">Avanzada</button>
       </div>
     </div>
-    <div class="card">
-      <div class="kpi"><div class="label">Ultima ingesta de Alaris</div></div>
-      <div class="status-row">
-        <div><span class="pill" id="r-status">—</span></div>
-        <div id="r-window"></div>
-        <div><b id="r-records">—</b>SMS recibidos</div>
-      </div>
-      <div class="err" id="r-error"></div>
+    <nav class="side-nav" id="side-nav"></nav>
+    <div class="side-foot">
+      <label for="actor">Tu nombre (queda en el historial)</label>
+      <input type="text" id="actor" maxlength="64" placeholder="ej. Ana" autocomplete="name">
+      <div class="side-status" id="side-status" aria-live="polite"></div>
     </div>
-  </section>
+  </aside>
+  <div class="scrim" id="scrim"></div>
 
-  <section class="charts">
-    <div class="card chart-card">
-      <h2>Verificaciones por resultado</h2>
-      <p class="desc" id="c1-desc">Intentos de Playwright por intervalo</p>
-      <ul class="legend" id="legend-checks"></ul>
-      <div class="chart" id="chart-checks"></div>
-      <details class="data"><summary>Ver datos en tabla</summary><div class="scroll" id="table-checks"></div></details>
-    </div>
-    <div class="pair">
-      <div class="card chart-card">
-        <h2>SMS ingestados</h2>
-        <p class="desc">SMS que entraron a la cola por intervalo</p>
-        <div class="chart" id="chart-ingest"></div>
-        <details class="data"><summary>Ver datos en tabla</summary><div class="scroll" id="table-ingest"></div></details>
+  <main class="main">
+    <div class="main-inner">
+      <div class="topbar">
+        <button type="button" id="menu-btn" aria-label="Abrir menu" aria-controls="sidebar">☰</button>
+        <b>ClickMaster</b><span id="topbar-section"></span>
       </div>
-      <div class="card chart-card">
-        <h2>Tiempo de carga promedio</h2>
-        <p class="desc">Solo paginas que cargaron, en milisegundos</p>
-        <div class="chart" id="chart-load"></div>
-        <details class="data"><summary>Ver datos en tabla</summary><div class="scroll" id="table-load"></div></details>
-      </div>
-    </div>
-  </section>
 
-  <section class="card">
-    <div class="tabs" role="tablist">
-      <button type="button" role="tab" data-tab="checks" aria-selected="true">Links verificados</button>
-      <button type="button" role="tab" data-tab="sms" aria-selected="false">SMS procesados</button>
+      <div class="banner" id="banner" role="status">
+        <span id="banner-text"></span>
+        <form class="token-form" id="token-form">
+          <input type="password" id="token" placeholder="ADMIN_TOKEN" autocomplete="off" aria-label="Token de administrador">
+          <button class="btn" type="submit">Entrar</button>
+        </form>
+      </div>
+
+      <!-- ===================== Panel (vista basica) ===================== -->
+      <section data-view="inicio" hidden>
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Panel</p>
+            <h1>ClickMaster</h1>
+            <p class="lede">Lo esencial en una pantalla: si esta corriendo, prenderlo o frenarlo, y que se le pide a Alaris.</p>
+          </div>
+          <div class="page-actions"><span id="home-updated"></span></div>
+        </header>
+
+        <div class="card home-hero">
+          <div class="home-state">
+            <span class="home-dot" id="home-dot" aria-hidden="true"></span>
+            <div>
+              <div class="home-title" id="home-title">—</div>
+              <div class="muted" id="home-sub"></div>
+            </div>
+          </div>
+          <div class="home-actions">
+            <button class="btn big primary" type="button" id="home-policy" hidden>Elegir politica</button>
+            <button class="btn big" type="button" id="home-toggle" disabled>—</button>
+          </div>
+          <dl class="home-facts" id="home-facts"></dl>
+        </div>
+
+        <div class="home-grid">
+          <div class="card">
+            <h2>Peticion a Alaris</h2>
+            <p class="desc">Que SMS se piden, cada cuanto y que politica decide cuales visitar. Se aplica en caliente, sin reiniciar.</p>
+            <form id="home-form" class="home-form" novalidate>
+              <label class="field">Producto (client_product_id)
+                <input type="text" id="home-product" placeholder="todos" autocomplete="off">
+              </label>
+              <label class="field">Pais
+                <input type="text" id="home-country" placeholder="todos" autocomplete="off">
+              </label>
+              <label class="field">Consultar cada
+                <select id="home-window"></select>
+              </label>
+              <label class="field">Politica activa
+                <select id="home-policy-select"></select>
+              </label>
+              <label class="field">Porcentaje de la politica
+                <input type="number" id="home-policy-pct" min="0" max="100" step="0.1">
+              </label>
+              <div class="form-row home-form-actions">
+                <button class="btn primary" type="submit" id="home-save" disabled>Guardar</button>
+                <button class="btn" type="button" id="home-undo" disabled>Deshacer</button>
+                <span class="result" id="home-form-result" style="margin:0"></span>
+              </div>
+            </form>
+            <p class="muted" id="home-policy-note" hidden></p>
+          </div>
+
+          <div class="card">
+            <h2>Pedir un rango ahora</h2>
+            <p class="desc">Trae de Alaris un rango puntual y lo procesa igual que la ingesta automatica. No cambia lo que viene despues; los SMS repetidos no se visitan dos veces.</p>
+            <div class="form-row">
+              <button class="btn" type="button" data-home-range="30">Ultimos 30 min</button>
+              <button class="btn" type="button" data-home-range="60">Ultima hora</button>
+            </div>
+            <form class="form-row" id="home-sync">
+              <input type="datetime-local" id="home-sync-start" aria-label="Desde" required>
+              <span class="range-label">a</span>
+              <input type="datetime-local" id="home-sync-end" aria-label="Hasta" required>
+              <button class="btn primary" type="submit" id="home-sync-btn">Pedir</button>
+            </form>
+            <div class="result" id="home-sync-result"></div>
+          </div>
+        </div>
+
+        <div class="info" style="margin-top:14px"><b class="t">¿Necesitas mas?</b>
+          <p>Politicas por cliente u horario, clicks manuales, capturas, historial de cambios y el resto de la configuracion estan en la <a href="#" id="home-advanced">vista avanzada</a> (selector arriba a la izquierda).</p>
+        </div>
+      </section>
+
+      <!-- ===================== Como funciona ===================== -->
+      <section data-view="guia" hidden>
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Empezar aca</p>
+            <h1>Como funciona ClickMaster</h1>
+            <p class="lede">Trae los SMS que salieron por Alaris, decide cuales visitar segun tus politicas y abre sus links con un navegador real para saber si la pagina carga.</p>
+          </div>
+        </header>
+        <div class="vtabs" data-tabs="guia"></div>
+
+        <div data-panel="guia/flujo">
+          <div class="flow">
+            <div class="step"><h3>Alaris</h3><p>Cada ventana (30 min por defecto, configurable) se piden a la API los SMS (EDR) de la ultima ventana cerrada, con el producto y pais configurados.</p><a href="#configuracion/scheduler">Cada cuanto →</a></div>
+            <div class="step"><h3>Ingesta</h3><p>Se validan los registros, se guardan en <code>sms_content</code> y se deduplican: un SMS repetido nunca genera otra visita.</p><a href="#operacion/estado">Ver estado →</a></div>
+            <div class="step"><h3>Politicas</h3><p>Cada SMS con link pasa por las politicas: deciden si se visita, en que porcentaje, en que horario y con que topes.</p><a href="#politicas/lista">Politicas →</a></div>
+            <div class="step"><h3>Cola</h3><p>Los aprobados quedan pendientes en <code>sms_processing</code>. La cola esta en MySQL: sobrevive reinicios.</p><a href="#reportes/resumen">Cola ahora →</a></div>
+            <div class="step"><h3>Worker</h3><p>Chromium abre cada link (hasta 4 a la vez), espera a que cargue y clasifica el resultado. Los errores transitorios se reintentan.</p><a href="#configuracion/worker">Worker →</a></div>
+            <div class="step"><h3>Reportes</h3><p>Cada intento queda registrado: % de paginas cargadas, errores, tiempos y el detalle de cada SMS.</p><a href="#reportes/graficos">Reportes →</a></div>
+          </div>
+          <div class="info"><b class="t">Dos tipos de visita</b>
+            <p><b>Automaticas</b>: las que hace el worker sobre los SMS de Alaris (pasos de arriba). <b>Clicks manuales</b>: abris una URL N veces a pedido desde <a href="#operacion/clicks">Operacion → Clicks manuales</a>; mientras corren, el worker se pausa para que nunca haya dos navegadores compitiendo por la memoria.</p>
+          </div>
+          <div class="info"><b class="t">Donde se configura cada cosa</b>
+            <p><a href="#configuracion/edr">Configuracion</a>: lo que se puede cambiar en caliente, sin reiniciar. <a href="#politicas/lista">Politicas</a>: que SMS visitar y como. <a href="#entorno/variables">Entorno (.env)</a>: credenciales, base de datos y valores que solo cambian editando <code>.env</code> y reiniciando. Todo cambio queda en el <a href="#historial/todo">Historial</a>.</p>
+          </div>
+        </div>
+
+        <div data-panel="guia/estados" hidden>
+          <div class="info"><b class="t">Para leer los reportes</b><p>Cada SMS tiene un <b>estado</b> en la cola y cada visita un <b>resultado</b>. Estas tablas explican que significa cada uno.</p></div>
+          <div class="card" style="margin-bottom:12px">
+            <h2>Estados de un SMS en la cola</h2>
+            <div class="tbl-wrap"><table class="glossary"><tbody>
+              <tr><td>Pendiente</td><td>Aprobado para visitar; espera su turno (o el inicio de la franja horaria de su politica).</td></tr>
+              <tr><td>En proceso</td><td>Un worker lo reservo y lo esta visitando.</td></tr>
+              <tr><td>Reintento</td><td>La visita fallo por algo transitorio (timeout, 5xx, DNS…); se vuelve a intentar mas tarde.</td></tr>
+              <tr><td>Verificado</td><td>La pagina cargo con contenido.</td></tr>
+              <tr><td>Fallido</td><td>Error definitivo (404, certificado…) o se agotaron los intentos.</td></tr>
+              <tr><td>Salteado</td><td>No se visita. El motivo: <code>sin link</code>, <code>fuera de muestra</code> (no salio en el porcentaje), <code>politica</code> (la politica dice no visitar), <code>tope politica</code> (se lleno el tope por hora/dia) o <code>en seleccion</code> (todavia no se eligio: espera a que llegue toda la ventana, o el dia entero en "dia vencido").</td></tr>
+            </tbody></table></div>
+          </div>
+          <div class="card">
+            <h2>Resultados de una visita</h2>
+            <div class="tbl-wrap"><table class="glossary"><tbody>
+              <tr><td>Cargada</td><td>Respondio 2xx/3xx y el DOM tiene contenido. Es el exito.</td></tr>
+              <tr><td>Error del sitio</td><td><code>http_4xx</code>, <code>http_5xx</code>, <code>http_429_408</code>, <code>certificado</code>, <code>navegacion</code>: el sitio respondio mal.</td></tr>
+              <tr><td>Indeterminado</td><td>Respondio pero no se pudo confirmar contenido (ej. redireccion por JS). Se reintenta.</td></tr>
+              <tr><td>Error tecnico</td><td><code>timeout</code>, <code>dns</code>, <code>conexion</code>, <code>error_interno</code>: problemas de red o del navegador. Se reintentan.</td></tr>
+            </tbody></table></div>
+          </div>
+        </div>
+
+        <div data-panel="guia/pasos" hidden>
+          <div class="info"><b class="t">Primeros pasos</b><p>Un recorrido corto para dejar el sistema funcionando como queres.</p></div>
+          <ol class="checklist">
+            <li><b>Escribi tu nombre</b><span>Abajo a la izquierda. Asi cada cambio queda firmado en el historial.</span></li>
+            <li><b>Revisa la fuente</b><span>En <a href="#configuracion/edr">Configuracion → Fuente Alaris</a>: producto y pais que se piden. Las credenciales estan en <a href="#entorno/variables">Entorno</a>.</span></li>
+            <li><b>Defini el porcentaje por defecto</b><span>En <a href="#configuracion/checker">Configuracion → Verificacion</a>. Con 4 sesiones se verifican ~3.600 links cada 30 min: si entran mas, la cola crece.</span></li>
+            <li><b>Crea politicas</b><span>En <a href="#politicas/editor">Politicas → Editor</a>, para clientes o dominios que necesiten otro porcentaje, horario o tope. Usa la vista previa antes de guardar.</span></li>
+            <li><b>Mira el resultado</b><span>En <a href="#reportes/resumen">Reportes</a> y en <a href="#operacion/estado">Operacion</a> (cola, atraso, worker).</span></li>
+            <li><b>Si algo raro llega de Alaris</b><span>Activa las capturas en <a href="#configuracion/capture">Configuracion → Capturas</a> y revisalas en <a href="#capturas/guardadas">Capturas</a>.</span></li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- ===================== Reportes ===================== -->
+      <section data-view="reportes" hidden>
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Monitoreo</p>
+            <h1>Reportes</h1>
+            <p class="lede">Que paso con las visitas en el rango elegido. Los datos se leen con un pool propio de solo lectura: mirar reportes no frena la ingesta ni el worker.</p>
+          </div>
+          <div class="page-actions meta">
+            <span id="updated">—</span>
+            <label><input type="checkbox" id="auto" checked> Actualizar cada 30 s</label>
+          </div>
+        </header>
+        <div class="filters" role="group" aria-label="Rango de tiempo">
+          <div class="seg" id="presets">
+            <button type="button" data-preset="30m" aria-pressed="true">30 min</button>
+            <button type="button" data-preset="1h" aria-pressed="false">1 h</button>
+            <button type="button" data-preset="6h" aria-pressed="false">6 h</button>
+            <button type="button" data-preset="24h" aria-pressed="false">24 h</button>
+            <button type="button" data-preset="7d" aria-pressed="false">7 dias</button>
+            <button type="button" data-preset="custom" aria-pressed="false">Personalizado</button>
+          </div>
+          <form class="custom" id="custom">
+            <input type="datetime-local" id="from" aria-label="Desde" required>
+            <span class="range-label">a</span>
+            <input type="datetime-local" id="to" aria-label="Hasta" required>
+            <button class="btn" type="submit">Aplicar</button>
+          </form>
+          <span class="range-label" id="range-label"></span>
+        </div>
+        <div class="vtabs" data-tabs="reportes"></div>
+
+        <div data-panel="reportes/resumen">
+          <section class="grid-kpi" aria-label="Resumen del rango">
+            <div class="card kpi hero"><div class="label">Paginas cargadas</div><div class="value" id="k-rate">—</div><div class="sub" id="k-rate-sub">del total de verificaciones</div></div>
+            <div class="card kpi"><div class="label">Verificaciones</div><div class="value" id="k-checks">—</div><div class="sub">intentos en el rango</div></div>
+            <div class="card kpi"><div class="label">Error del sitio</div><div class="value" id="k-sitio">—</div><div class="sub">4xx, 5xx, certificado…</div></div>
+            <div class="card kpi"><div class="label">Error tecnico</div><div class="value" id="k-tecnico">—</div><div class="sub">timeout, DNS, conexion…</div></div>
+            <div class="card kpi"><div class="label">Tiempo de carga</div><div class="value" id="k-load">—</div><div class="sub">promedio de las cargadas</div></div>
+            <div class="card kpi"><div class="label">SMS ingestados</div><div class="value" id="k-sms">—</div><div class="sub">entraron a la cola en el rango</div></div>
+          </section>
+          <section class="row2">
+            <div class="card">
+              <div class="kpi"><div class="label">Cola ahora</div></div>
+              <div class="status-row">
+                <div><b id="q-pending">—</b>pendientes</div>
+                <div><b id="q-processing">—</b>en proceso</div>
+                <div><b id="q-retry">—</b>para reintentar</div>
+                <div><b id="q-lag">—</b>de atraso</div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="kpi"><div class="label">Ultima ingesta de Alaris</div></div>
+              <div class="status-row">
+                <div><span class="pill" id="r-status">—</span></div>
+                <div id="r-window"></div>
+                <div><b id="r-records">—</b>SMS recibidos</div>
+              </div>
+              <div class="err" id="r-error"></div>
+            </div>
+          </section>
+          <details class="howto">
+            <summary>Como leer estos numeros</summary>
+            <div class="body">
+              <ul>
+                <li><b>Paginas cargadas</b>: de todos los intentos del rango, cuantos terminaron en "cargada". Un mismo SMS puede tener varios intentos (reintentos).</li>
+                <li><b>Atraso</b>: cuanto hace que espera el trabajo pendiente mas viejo. Si crece todo el tiempo, entran mas SMS de los que el worker alcanza a visitar: baja el porcentaje o crea politicas con topes.</li>
+                <li><b>Ultima ingesta</b>: <i>success</i> = la ventana se proceso entera; <i>partial</i> = hubo registros invalidos (se pueden ver en Capturas); <i>failed</i> = fallo y se reintenta sola en el proximo chequeo.</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+
+        <div data-panel="reportes/graficos" hidden>
+          <section class="charts">
+            <div class="card chart-card">
+              <h2>Verificaciones por resultado</h2>
+              <p class="desc" id="c1-desc">Intentos de Playwright por intervalo</p>
+              <ul class="legend" id="legend-checks"></ul>
+              <div class="chart" id="chart-checks"></div>
+              <details class="data"><summary>Ver datos en tabla</summary><div class="scroll" id="table-checks"></div></details>
+            </div>
+            <div class="pair">
+              <div class="card chart-card">
+                <h2>SMS ingestados</h2>
+                <p class="desc">SMS que entraron a la cola por intervalo</p>
+                <div class="chart" id="chart-ingest"></div>
+                <details class="data"><summary>Ver datos en tabla</summary><div class="scroll" id="table-ingest"></div></details>
+              </div>
+              <div class="card chart-card">
+                <h2>Tiempo de carga promedio</h2>
+                <p class="desc">Solo paginas que cargaron, en milisegundos</p>
+                <div class="chart" id="chart-load"></div>
+                <details class="data"><summary>Ver datos en tabla</summary><div class="scroll" id="table-load"></div></details>
+              </div>
+            </div>
+          </section>
+          <div class="info"><b class="t">Intervalos</b><p>Cada columna agrupa un intervalo (1 min a 1 dia segun el rango, maximo 60 columnas). Pasa el mouse o usa las flechas del teclado sobre un grafico para ver los valores.</p></div>
+        </div>
+
+        <div data-panel="reportes/registros" hidden>
+          <div class="info"><b class="t">Dos listados</b><p><b>Links verificados</b>: un renglon por intento de visita, con su resultado. <b>SMS procesados</b>: un renglon por SMS ingestado, con su estado en la cola y la politica que le toco. Los mas nuevos primero, 25 por pagina.</p></div>
+          <section class="card">
+            <div class="tabs" role="tablist">
+              <button type="button" role="tab" data-tab="checks" aria-selected="true">Links verificados</button>
+              <button type="button" role="tab" data-tab="sms" aria-selected="false">SMS procesados</button>
+            </div>
+            <div class="tbl-tools">
+              <span class="form-row" style="margin:0">
+                <select id="tbl-filter" aria-label="Filtrar"></select>
+                <select id="tbl-policy" aria-label="Filtrar por politica" hidden></select>
+              </span>
+              <span class="range-label" id="tbl-info"></span>
+            </div>
+            <div class="tbl-wrap" id="tbl"></div>
+            <div class="pager">
+              <span id="page-label">Pagina 1</span>
+              <button class="btn" type="button" id="prev" disabled>Anterior</button>
+              <button class="btn" type="button" id="next" disabled>Siguiente</button>
+            </div>
+          </section>
+        </div>
+        <div data-panel="reportes/cumplimiento" hidden>
+          <div class="info"><b class="t">¿Se cumplio lo que prometia la politica?</b>
+            <p>Por dia (de los SMS, hora de Alaris) y por politica: el <b>objetivo</b> (el % sobre la base de la politica) contra los <b>SMS clickeados</b> (con un 200). Ejemplo: "20% del dia vencido" con 150.000 SMS ayer → objetivo 30.000; si hubo 26.400 con 200, el cumplimiento es 88%.</p>
+            <p>El objetivo se calcula con las reglas <b>actuales</b> de la politica. Las visitas de un dia tienen hasta el fin de ese dia (en "dia vencido", hasta el fin del dia siguiente). Si al ritmo actual del worker no se llega antes del cierre, aparece un aviso.</p>
+          </div>
+          <div class="form-row" style="margin:0 0 12px">
+            <label class="muted" for="cmp-days">Dias</label>
+            <select id="cmp-days"><option value="3">ultimos 3</option><option value="7" selected>ultimos 7</option><option value="14">ultimos 14</option></select>
+            <button class="btn" type="button" id="cmp-refresh">Actualizar</button>
+            <span class="muted" id="cmp-updated"></span>
+          </div>
+          <div class="card chart-card" id="cmp-chart-card" hidden style="margin-bottom:14px">
+            <h2 id="cmp-chart-title">Avance por hora</h2>
+            <p class="desc" id="cmp-chart-desc"></p>
+            <ul class="legend" id="cmp-legend"></ul>
+            <div class="chart" id="cmp-chart"></div>
+            <details class="data"><summary>Ver los datos por hora</summary><div class="scroll tbl-wrap" id="cmp-chart-table"></div></details>
+          </div>
+          <div class="stack" id="cmp-days-list"></div>
+        </div>
+      </section>
+
+      <!-- ===================== Operacion ===================== -->
+      <section data-view="operacion" hidden>
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Monitoreo</p>
+            <h1>Operacion</h1>
+            <p class="lede">Estado en vivo de las piezas que trabajan solas, y acciones a mano cuando hacen falta.</p>
+          </div>
+          <div class="page-actions"><span id="ops-updated"></span></div>
+        </header>
+        <div class="vtabs" data-tabs="operacion"></div>
+
+        <div data-panel="operacion/estado">
+          <div class="info"><b class="t">Que se ve aca</b>
+            <p>La <b>ingesta automatica</b> pide a Alaris cada ventana cuando cierra (el tamano se cambia en <a href="#configuracion/scheduler">Configuracion → Ingesta automatica</a>). El <b>worker</b> toma SMS de la cola y los visita con Chromium. Pausar cualquiera de los dos queda guardado (sobrevive a un reinicio) hasta que lo reanudes. Se actualiza solo cada 10 s.</p>
+          </div>
+          <section class="grid-kpi" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
+            <div class="card">
+              <h2>Ingesta automatica</h2>
+              <div class="status-row"><span class="pill" id="ops-sched-state">—</span></div>
+              <dl class="kv" id="ops-sched" style="margin-top:10px"></dl>
+              <div class="form-row"><button class="btn" type="button" id="ops-sched-toggle">—</button></div>
+            </div>
+            <div class="card">
+              <h2>Worker</h2>
+              <div class="status-row"><span class="pill" id="ops-worker-state">—</span></div>
+              <dl class="kv" id="ops-worker" style="margin-top:10px"></dl>
+              <div class="form-row"><button class="btn" type="button" id="ops-worker-toggle">—</button></div>
+            </div>
+            <div class="card">
+              <h2>Cola</h2>
+              <dl class="kv" id="ops-queue" style="margin-top:10px"></dl>
+              <div class="form-row">
+                <button class="btn" type="button" id="ops-recover">Recuperar reservas vencidas</button>
+              </div>
+              <label class="muted form-row"><input type="checkbox" id="ops-recover-force"> Forzar tambien las vigentes (solo con una instancia)</label>
+              <div class="result" id="ops-recover-result"></div>
+            </div>
+          </section>
+          <details class="howto">
+            <summary>¿Que es "recuperar reservas"?</summary>
+            <div class="body">
+              <p>Cuando el worker toma un SMS lo <b>reserva</b> por un tiempo (5 min por defecto). Si el proceso se cae a mitad de una visita, la reserva vence y el SMS vuelve a la cola solo (se chequea cada minuto).</p>
+              <p>El boton hace lo mismo en el momento. <b>Forzar</b> devuelve tambien las reservas vigentes: usalo solo si hay una unica instancia corriendo, si no otra instancia podria estar visitandolas.</p>
+            </div>
+          </details>
+        </div>
+
+        <div data-panel="operacion/ventana" hidden>
+          <div class="info"><b class="t">Ingesta manual</b>
+            <p>Pide a Alaris un rango puntual (hasta 24 h) y lo procesa igual que la ingesta automatica, con las politicas de ahora. <b>No mueve el cursor</b>: la ingesta automatica sigue donde estaba. Es idempotente: si pedis un rango ya ingestado, los SMS repetidos no generan visitas nuevas.</p>
+          </div>
+          <div class="card">
+            <h2>Pedir una ventana</h2>
+            <p class="desc">Hora de este navegador. Puede tardar varios minutos (Alaris responde todo junto).</p>
+            <form class="form-row" id="ops-sync">
+              <input type="datetime-local" id="ops-sync-start" aria-label="Desde" required>
+              <span class="range-label">a</span>
+              <input type="datetime-local" id="ops-sync-end" aria-label="Hasta" required>
+              <button class="btn primary" type="submit">Pedir ventana</button>
+            </form>
+            <div class="result" id="ops-sync-result"></div>
+          </div>
+          <div class="info" style="margin-top:14px"><b class="t">¿Queres ver la respuesta sin ingestarla?</b><p>Usa <a href="#capturas/pedir">Capturas → Pedir un rango</a>: guarda lo que devuelve Alaris para revisarlo y simular politicas antes de decidir.</p></div>
+        </div>
+
+        <div data-panel="operacion/clicks" hidden>
+          <div class="info"><b class="t">Clicks manuales</b>
+            <ul>
+              <li>Abren una URL N veces, cada vez con una sesion de navegador nueva (sin cookies compartidas). Cada sesion se queda en la pagina el tiempo configurado en <a href="#configuracion/clicker">Configuracion → Clicks manuales</a>.</li>
+              <li>Corre un job por vez; un <b>lote</b> encola un job por linea y los corre en orden.</li>
+              <li>Mientras hay clicks, el <b>worker automatico se pausa</b> y se reanuda solo al terminar.</li>
+              <li>El progreso vive en memoria: si se reinicia la app, se pierde (lo lanzado si queda en el historial).</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h2>Lanzar</h2>
+            <div id="clicks-current"></div>
+            <form class="form-row" id="clicks-form">
+              <input type="url" id="clicks-url" placeholder="https://..." aria-label="URL" required>
+              <input type="number" id="clicks-count" min="1" value="10" style="width:110px" aria-label="Cantidad" required>
+              <button class="btn primary" type="submit">Lanzar</button>
+            </form>
+            <details style="margin-top:10px">
+              <summary class="muted" style="cursor:pointer">Lote (una linea <code>url,cantidad</code> por job)</summary>
+              <form id="clicks-batch" style="margin-top:8px">
+                <textarea id="clicks-batch-text" rows="5" style="width:100%" placeholder="# comentario&#10;https://ejemplo.com/a,50&#10;https://ejemplo.com/b,20"></textarea>
+                <div class="form-row">
+                  <input type="file" id="clicks-batch-file" accept=".txt,.csv,text/plain" aria-label="Cargar archivo">
+                  <button class="btn primary" type="submit">Lanzar lote</button>
+                </div>
+              </form>
+            </details>
+            <div class="result" id="clicks-result"></div>
+          </div>
+          <div class="card" style="margin-top:12px">
+            <h2>Ultimos jobs</h2>
+            <div class="tbl-wrap" id="clicks-history"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== Politicas ===================== -->
+      <section data-view="politicas" hidden>
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Reglas</p>
+            <h1>Politicas</h1>
+            <p class="lede">Deciden que SMS se visitan, cuantos, cuando y como. Hay una sola activa a la vez.</p>
+          </div>
+          <div class="page-actions"><button class="btn primary" type="button" id="pol-new">Nueva politica</button></div>
+        </header>
+        <div class="vtabs" data-tabs="politicas"></div>
+
+        <div data-panel="politicas/lista">
+          <div class="info"><b class="t">Una sola activa</b><p>Solo puede haber una politica activa: prender el interruptor de una apaga la que estaba. Los SMS con link que no coinciden con la activa usan la regla <b>Por defecto</b> (al final). <b>Sin ninguna activa el sistema queda en espera</b>: no se piden SMS a Alaris ni se visita ningun link.</p>
+            <p>Activar otra (o editar las reglas de la activa) mientras corre se aplica sobre <b>todo el contenido de hoy</b>: antes de confirmar se abre un aviso para elegir como contar los SMS que ya se clickearon. Apagar la activa no pregunta: el sistema queda en espera hasta que actives otra (no se saltea nada: al activarla retoma desde donde quedo).</p></div>
+          <div class="stack" id="pol-list"></div>
+          <div class="card" style="margin-top:12px">
+            <h2>Cambios recientes</h2>
+            <p class="desc">Cada cambio de la politica activa retoma el contenido del dia en segundo plano. Aca se ve si ya se aplico y que hizo.</p>
+            <div class="tbl-wrap" id="pol-changes"></div>
+          </div>
+        </div>
+
+        <div data-panel="politicas/editor" hidden>
+          <div class="form-row" style="margin:0 0 12px"><button class="btn" type="button" id="pol-back">← Volver a la lista</button></div>
+          <div class="info"><b class="t">Editor</b><p>Completa solo lo que necesites: los campos vacios significan "todos" (en la coincidencia) o "el valor global" (en la visita). Antes de guardar, usa <b>Vista previa</b> para ver cuantos SMS de las ultimas horas tomaria y cuantos visitaria <b>si fuera la politica activa</b> (este prendida o no).</p></div>
+          <div class="card" id="pol-editor"></div>
+        </div>
+
+        <div data-panel="politicas/ayuda" hidden>
+          <div class="stack">
+            <div class="info"><b class="t">Que SMS toma</b><p>Listas de clientes, senders, paises, redes, MCC/MNC, vendors y dominios del link. Dentro de una lista alcanza con que coincida uno; entre listas tienen que coincidir todas. <code>*.dominio.com</code> incluye subdominios. No distingue mayusculas.</p></div>
+            <div class="info"><b class="t">Primero llega todo, despues se elige</b><p>Mientras se ingesta, cada SMS queda <b>en seleccion</b> con su politica. Recien cuando llego el periodo completo (la ventana entera, o el dia entero) se elige cuales visitar: asi el porcentaje y la estrategia se aplican sobre el total y no sobre pedazos.</p></div>
+            <div class="info"><b class="t">Cuantos visita: sobre que total</b>
+              <ul>
+                <li><b>De cada ventana</b>: X % de los SMS de cada ventana (30 min por defecto), elegidos cuando la ventana llego entera.</li>
+                <li><b>Dia vencido</b>: X % de todos los SMS del dia anterior, elegidos entre los SMS de ese dia cuando el dia cerro. Los SMS de hoy no se visitan hasta manana. Ej.: ayer 150.000 SMS, 20 % → hoy se visitan 30.000 de los de ayer.</li>
+                <li><b>Mismo dia de la semana anterior</b>: la cuota del dia es X % del total del mismo dia de la semana anterior (o el promedio de las ultimas N semanas). Esa cantidad se visita entre los SMS de hoy, repartida a lo largo del dia segun la estrategia. Ej.: el lunes pasado hubo 150.000, 20 % → este lunes se visitan 30.000. Si no hay datos de esa semana, usa X % de cada ventana.</li>
+                <li><b>No visitar</b>: quedan salteados con motivo "politica".</li>
+              </ul>
+            </div>
+            <div class="info"><b class="t">Cuales visita: estrategia</b>
+              <p>Sobre los SMS del periodo ordenados por hora. El editor muestra un ejemplo de cada una.</p>
+              <ul>
+                <li><b>Intercalado</b>: parejo a lo largo del periodo (uno cada N). <b>Aleatorio</b>: al azar.</li>
+                <li><b>Primeros</b> / <b>Ultimos</b>: los mas viejos / los mas nuevos.</li>
+                <li><b>Progresivo</b>: cada vez mas seguidos hacia el final. <b>Regresivo</b>: al reves.</li>
+                <li><b>Fibonacci</b>: saltos 1, 1, 2, 3, 5, 8 que vuelven a empezar (rafagas que se van espaciando).</li>
+              </ul>
+              <p>En "mismo dia de la semana anterior" la estrategia tambien reparte la cuota entre las ventanas del dia: intercalado = parejo, progresivo = mas a la tarde, primeros = todo lo antes posible, ultimos = se reserva para el final.</p>
+            </div>
+            <div class="info"><b class="t">Cuando y cuanto</b><p><b>Horario</b>: dias y franjas en hora de Alaris; un SMS aprobado fuera de horario espera al inicio de la proxima franja (tambien sus reintentos). Se suma al <a href="#configuracion/horario">horario global de visitas</a>. <b>Topes</b>: maximo de SMS aprobados por hora y por dia; el excedente queda salteado con motivo "tope politica".</p></div>
+            <div class="info"><b class="t">Como visita</b><p>Permanencia en la pagina, timeout, intentos maximos y bloqueo de imagenes. Lo vacio usa la <a href="#configuracion/worker">configuracion global</a>. Mas permanencia = menos visitas por minuto.</p></div>
+            <div class="info warn"><b class="t">Importante</b><p>Hay una sola politica activa. Cambiarla (o editar las reglas de la activa) mientras corre retoma <b>todo el contenido de hoy</b>: los SMS de hoy se re-asignan a la regla nueva y se vuelven a elegir (en "dia vencido", manana al cerrar el dia). Lo que ya estaba en cola o clickeado se deja. Si la regla nueva vuelve a elegir un SMS ya clickeado, en el aviso del cambio elegis si <b>cuenta igual</b> (no se repite) o <b>cuenta como otro click</b> (se visita de nuevo). Cada visita a la que el sitio responde 200 suma 1 en "clicks realizados" del SMS (columna Clicks en Reportes → Registros); un error del sitio (404, 500...), un timeout o un DNS caido no cuentan.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== Capturas ===================== -->
+      <section data-view="capturas" hidden>
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Reglas</p>
+            <h1>Capturas de Alaris</h1>
+            <p class="lede">Copias temporales de lo que devolvio la API, para revisar, simular politicas y decidir si reprocesar.</p>
+          </div>
+          <div class="page-actions"><span id="cap-usage"></span></div>
+        </header>
+        <div class="vtabs" data-tabs="capturas"></div>
+
+        <div data-panel="capturas/guardadas">
+          <div class="info"><b class="t">Elegi una captura</b><p>Toca una fila para ver su resumen (clientes, senders, paises, dominios), sus registros y las acciones: simular politicas, reprocesar, conservar o descartar.</p></div>
+          <div class="card" style="margin-bottom:12px">
+            <div class="tbl-wrap" id="cap-list"></div>
+            <div class="pager"><button class="btn" type="button" id="cap-more" disabled>Mas antiguas</button></div>
+          </div>
+          <div class="card" id="cap-detail" hidden></div>
+        </div>
+
+        <div data-panel="capturas/pedir" hidden>
+          <div class="info"><b class="t">Pedir sin ingestar</b><p>Llama a Alaris con la configuracion actual (producto, pais, argumentos) y guarda la respuesta tal cual, <b>sin</b> crear SMS ni visitas. Sirve para ver que esta mandando la API o probar un filtro antes de cambiarlo.</p></div>
+          <div class="card">
+            <h2>Rango</h2>
+            <p class="desc">Hasta 24 h. Hora de este navegador. Puede tardar minutos; se permite un pedido a la vez.</p>
+            <form class="form-row" id="cap-form">
+              <input type="datetime-local" id="cap-start" aria-label="Desde" required>
+              <span class="range-label">a</span>
+              <input type="datetime-local" id="cap-end" aria-label="Hasta" required>
+              <button class="btn primary" type="submit">Pedir y capturar</button>
+            </form>
+            <div class="result" id="cap-form-result"></div>
+          </div>
+        </div>
+
+        <div data-panel="capturas/ayuda" hidden>
+          <div class="stack">
+            <div class="info"><b class="t">Que se guarda</b>
+              <ul>
+                <li><b>Ninguna</b>: no se guarda nada.</li>
+                <li><b>Solo errores</b> (por defecto): respuestas que no se pudieron usar (JSON invalido, error de la API) y los registros invalidos de una ventana <i>partial</i>.</li>
+                <li><b>Todas</b>: cada respuesta completa. ~5 MB comprimidos y ~1 s de CPU por ventana: usarlo un rato para diagnosticar.</li>
+                <li><b>Pedidas desde la web</b>: siempre se guardan.</li>
+              </ul>
+              <p>Se cambia en <a href="#configuracion/capture">Configuracion → Capturas</a>. Nunca se guardan las credenciales.</p>
+            </div>
+            <div class="info"><b class="t">Cuanto duran</b><p>Vencen a las horas configuradas (24 por defecto) y se borran solas. Si se pasa del espacio maximo se borran las mas viejas. Las <b>conservadas</b> no vencen.</p></div>
+            <div class="info"><b class="t">Decidir</b><p><b>Simular politicas</b> calcula, con las politicas de ahora, cuantos SMS de la captura tomaria cada una y cuantos se visitarian (no guarda nada). <b>Reprocesar</b> la ingesta como una ventana manual: es seguro repetirlo, los SMS que ya estaban no se duplican.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== Configuracion ===================== -->
+      <section data-view="configuracion" hidden>
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Sistema</p>
+            <h1>Configuracion</h1>
+            <p class="lede">Todo lo de aca se aplica en caliente, sin reiniciar. Lo que solo se puede cambiar en <code>.env</code> esta en <a href="#entorno/variables">Entorno (.env)</a>.</p>
+          </div>
+        </header>
+        <div class="vtabs" data-tabs="configuracion"></div>
+        <details class="howto">
+          <summary>¿De donde sale cada valor?</summary>
+          <div class="body">
+            <p>Cada valor muestra su origen: <span class="badge base">editado en la web</span>, <span class="badge">.env</span> o <span class="badge">por defecto</span>. Lo guardado desde aca tiene prioridad sobre <code>.env</code>; "Volver al valor de .env" borra el cambio. Con varias instancias, cada una toma los cambios en hasta 30 s.</p>
+            <p>Podes editar varias pestanas y guardar todo junto: la barra de abajo cuenta los cambios pendientes y antes de guardar muestra un resumen. Si algun valor es invalido no se guarda nada.</p>
+          </div>
+        </details>
+
+        <div data-panel="configuracion/edr">
+          <div class="info"><b class="t">Fuente Alaris</b><p>A quien y como se le piden los SMS. Cada consulta es un JSON-RPC con el rango de fechas y estos filtros. Alaris no pagina: si la respuesta llega al tope de filas se vuelve a pedir desde la fecha del ultimo registro hasta el mismo fin, hasta traer todo.</p></div>
+          <div class="mode-switch">
+            <div class="seg" id="edr-mode" role="group" aria-label="Como editar la fuente">
+              <button type="button" data-mode="vars" aria-pressed="true">Por variables</button>
+              <button type="button" data-mode="curl" aria-pressed="false">Por curl</button>
+            </div>
+            <span class="muted">Las dos vistas editan lo mismo: lo que cambies en una se ve en la otra. Se guarda con la barra de abajo.</span>
+          </div>
+          <div class="card" id="settings-group-edr"></div>
+          <div id="edr-curl-view" hidden>
+            <div class="info"><b class="t">La peticion como curl</b>
+              <p>Es exactamente lo que la app le manda a Alaris en cada consulta, armado con las variables de la otra vista. Podes editarlo: al cambiar el texto se actualizan las variables (URL, metodo, cursor, producto, pais, argumentos extra, <code>--max-time</code> y <code>--retry</code>).</p>
+              <p><code>orderby_clause: "edr_date asc"</code> lo agrega siempre la app: sin el, Alaris no garantiza el orden y la paginacion por ultimo registro lo necesita. <code>&lt;inicio&gt;</code> y <code>&lt;fin&gt;</code> los completa la ingesta con cada ventana. La credencial (<code>$EDR_AUTH</code>) y el bearer (<code>$API_TOKEN</code>) salen de <a href="#entorno/variables">.env</a> y no se pueden cambiar desde aca.</p>
+            </div>
+            <div class="card">
+              <div class="curl-head">
+                <span class="curl-status" id="edr-curl-status" aria-live="polite"></span>
+                <span class="form-row" style="margin:0">
+                  <button class="btn" type="button" id="edr-curl-reset">Regenerar desde las variables</button>
+                  <button class="btn" type="button" id="edr-curl-copy">Copiar</button>
+                </span>
+              </div>
+              <textarea id="edr-curl" class="curl" spellcheck="false" autocomplete="off" aria-label="Peticion a Alaris como curl" rows="22"></textarea>
+              <ul class="curl-notes" id="edr-curl-notes"></ul>
+            </div>
+          </div>
+        </div>
+        <div data-panel="configuracion/scheduler" hidden>
+          <div class="info"><b class="t">Cada cuanto se consulta a Alaris</b>
+            <p>Los SMS se piden por <b>ventanas</b> de tiempo. Con ventanas de 30 min: a las 10:05 (cierre 10:00 + 5 min de margen) se pide 09:30-10:00, a las 10:35 se pide 10:00-10:30, y asi. Un SMS tarda como maximo <b>ventana + margen</b> en entrar.</p>
+            <p>Para consultar mas seguido, achica "Cada cuanto se consulta a Alaris" (y el margen si Alaris ya tiene los EDR al instante). La "frecuencia de chequeo interno" solo define cada cuanto se fija si ya cerro una ventana. Si una ventana falla, se reintenta la misma en el proximo chequeo: nunca se saltea.</p>
+          </div>
+          <div class="card" id="settings-group-scheduler"></div>
+        </div>
+        <div data-panel="configuracion/worker" hidden>
+          <div class="info"><b class="t">Worker y Chromium</b><p>El worker toma SMS de la cola de a lotes y los visita con un Chromium compartido. El servidor tiene 1 nucleo y 2 GB: las sesiones en paralelo son el limite real de visitas por minuto (~30 por sesion).</p></div>
+          <div class="card" id="settings-group-worker"></div>
+        </div>
+        <div data-panel="configuracion/horario" hidden>
+          <div class="info"><b class="t">Horario de visitas</b>
+            <p>Un horario para todo el sistema (por ejemplo, horario laboral): fuera de el, el worker no visita links y los SMS elegidos esperan en la cola hasta que vuelve a abrir. La ingesta y la seleccion siguen funcionando igual, y los clicks manuales no se frenan. Va en hora de Alaris.</p>
+            <p>Cada politica puede ademas tener su propio horario (en su editor): un SMS se visita cuando se cumplen los dos.</p>
+          </div>
+          <div class="card" id="settings-group-horario"></div>
+        </div>
+        <div data-panel="configuracion/checker" hidden>
+          <div class="info"><b class="t">Verificacion de links</b><p>El porcentaje por defecto aplica a los SMS que no coinciden con ninguna <a href="#politicas/lista">politica</a>. Si entran mas SMS de los que el worker alcanza, la cola y el atraso crecen.</p></div>
+          <div class="card" id="settings-group-checker"></div>
+        </div>
+        <div data-panel="configuracion/clicker" hidden>
+          <div class="info"><b class="t">Clicks manuales</b><p>Valores de los jobs que se lanzan desde <a href="#operacion/clicks">Operacion → Clicks manuales</a>. Aplican al proximo job.</p></div>
+          <div class="card" id="settings-group-clicker"></div>
+        </div>
+        <div data-panel="configuracion/capture" hidden>
+          <div class="info"><b class="t">Capturas de Alaris</b><p>Que respuestas de la API se guardan para revisarlas en <a href="#capturas/guardadas">Capturas</a>, y cuanto duran.</p></div>
+          <div class="card" id="settings-group-capture"></div>
+        </div>
+
+        <div class="savebar" id="savebar" hidden>
+          <span id="savebar-text"></span>
+          <span class="form-row" style="margin:0">
+            <button class="btn" type="button" id="settings-discard">Descartar</button>
+            <button class="btn primary" type="button" id="settings-review">Revisar y guardar</button>
+          </span>
+        </div>
+        <dialog id="settings-dialog">
+          <h2>Confirmar cambios</h2>
+          <div class="diff" id="settings-diff"></div>
+          <div class="actions">
+            <button class="btn" type="button" id="settings-cancel">Volver</button>
+            <button class="btn primary" type="button" id="settings-save">Guardar</button>
+          </div>
+        </dialog>
+      </section>
+
+      <!-- ===================== Entorno (.env) ===================== -->
+      <section data-view="entorno" hidden>
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Sistema</p>
+            <h1>Entorno (.env)</h1>
+            <p class="lede">Lo que no se puede cambiar desde la web: credenciales, base de datos, red y la zona horaria de Alaris. Solo se cambian editando <code>.env</code> en el servidor y reiniciando.</p>
+          </div>
+        </header>
+        <div class="vtabs" data-tabs="entorno"></div>
+
+        <div data-panel="entorno/variables">
+          <div class="info warn"><b class="t">Solo lectura</b><p>Los secretos (contrasenas, tokens, credencial de Alaris) nunca se muestran: solo si estan configurados.</p></div>
+          <div class="mode-switch">
+            <div class="seg" id="env-mode" role="group" aria-label="Como ver las variables">
+              <button type="button" data-mode="vars" aria-pressed="true">Por variables</button>
+              <button type="button" data-mode="file" aria-pressed="false">Como archivo .env</button>
+            </div>
+            <span class="muted">Mismo contenido, dos formas de verlo. Para cambiar algo hay que editar <code>.env</code> en el servidor y reiniciar.</span>
+          </div>
+          <div id="env-groups"></div>
+          <div id="env-file-view" hidden>
+            <div class="card">
+              <div class="curl-head">
+                <span class="curl-status">Asi se ve en <code>.env</code> (secretos ocultos)</span>
+                <button class="btn" type="button" id="env-file-copy">Copiar</button>
+              </div>
+              <pre class="envfile" id="env-file" aria-label="Variables como archivo .env"></pre>
+              <ul class="curl-notes">
+                <li>Las lineas comentadas con <code># NOMBRE=</code> no estan en <code>.env</code>: la app usa el valor por defecto que se indica.</li>
+                <li>Los secretos se muestran como <code>********</code>: al copiarlo hay que completarlos a mano.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div data-panel="entorno/pisadas" hidden>
+          <div class="info"><b class="t">Valores de .env pisados desde la web</b><p>Estas variables existen en <code>.env</code> pero hoy manda el valor guardado en <a href="#configuracion/edr">Configuracion</a>. Si queres que vuelva a mandar <code>.env</code>, usa "Volver al valor de .env" en esa pantalla.</p></div>
+          <div class="card"><div class="tbl-wrap" id="env-overrides"></div></div>
+        </div>
+
+        <div data-panel="entorno/como" hidden>
+          <div class="info"><b class="t">Como cambiar una variable de entorno</b>
+            <ol style="margin:4px 0 0;padding-left:18px;color:var(--text-secondary);font-size:13px">
+              <li>Entrar al servidor y editar el archivo <code>.env</code> en la carpeta del proyecto (la plantilla con todas las variables comentadas es <code>.env.example</code>).</li>
+              <li>Reiniciar la app: <code>make restart</code> (o <code>make up</code> si cambiaste algo de Docker).</li>
+              <li>Verificar con <code>make health</code> o en esta misma pantalla.</li>
+            </ol>
+          </div>
+          <div class="info"><b class="t">Orden de prioridad</b><p>Para lo que tambien es editable en la web: <b>web</b> &gt; <b>.env</b> &gt; <b>valor por defecto</b>. Si cambias en <code>.env</code> algo que esta pisado desde la web, no vas a ver el cambio hasta que vuelvas ese valor a .env (pestana "Pisadas desde la web").</p></div>
+          <div class="info warn"><b class="t">Cuidado</b><p>Cambiar la zona horaria corre todas las fechas de Alaris: puede dejar un hueco o repetir un rango. Las credenciales de Alaris son base64 de usuario:clave: nunca las subas al repositorio.</p></div>
+        </div>
+      </section>
+
+      <!-- ===================== Historial ===================== -->
+      <section data-view="historial" hidden>
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Sistema</p>
+            <h1>Historial</h1>
+            <p class="lede">Todo lo que se cambio o se lanzo desde la web: quien, cuando y que valor habia antes.</p>
+          </div>
+        </header>
+        <div class="vtabs" data-tabs="historial"></div>
+        <div class="info"><b class="t">Quien</b><p>Es el nombre escrito abajo a la izquierda, mas la IP. Sirve para trazabilidad, no es un login: la proteccion de la app es el <code>ADMIN_TOKEN</code> y que solo se publica en el servidor.</p></div>
+        <div class="card">
+          <div class="tbl-wrap" id="audit-table"></div>
+          <div class="pager"><button class="btn" type="button" id="audit-more" disabled>Mas antiguos</button></div>
+        </div>
+      </section>
     </div>
-    <div class="tbl-tools">
-      <select id="tbl-filter" aria-label="Filtrar"></select>
-      <span class="range-label" id="tbl-info"></span>
-    </div>
-    <div class="tbl-wrap" id="tbl"></div>
-    <div class="pager">
-      <span id="page-label">Pagina 1</span>
-      <button class="btn" type="button" id="prev" disabled>Anterior</button>
-      <button class="btn" type="button" id="next" disabled>Siguiente</button>
-    </div>
-  </section>
+  </main>
 </div>
+<!-- Aviso de cambio de la politica activa (lo usan Politicas y el Panel) -->
+  <dialog id="pol-change-dialog" aria-labelledby="pol-change-title">
+    <h2 id="pol-change-title">Cambiar la politica activa</h2>
+    <p id="pol-change-what" style="margin:0 0 10px"></p>
+    <div class="info"><b class="t">Se toma todo el contenido de hoy</b>
+      <p>La regla nueva se aplica sobre todos los SMS de hoy (desde las 00:00, hora de Alaris), no solo sobre los que lleguen. Los clicks ya hechos se mantienen.</p>
+      <ul id="pol-change-effects"></ul>
+    </div>
+    <fieldset>
+      <legend>Si vuelve a elegir un SMS que ya se clickeo</legend>
+      <p class="muted" style="margin:0 0 4px">Click = una visita a la que el sitio respondio 200. Si la visita anterior no tuvo un 200 (error del sitio, timeout, sitio caido), se vuelve a intentar en los dos casos.</p>
+      <label class="choice"><input type="radio" name="pol-repeat" value="igual" checked>
+        <span><b>Cuenta igual</b><br><span class="muted">No se vuelve a visitar: el click que ya se hizo cuenta para la cuota de la regla nueva. Ese SMS queda con 1 click.</span></span></label>
+      <label class="choice"><input type="radio" name="pol-repeat" value="doble">
+        <span><b>Cuenta como otro click</b><br><span class="muted">Se visita de nuevo y queda registrado como un click mas (ese SMS pasa a 2 clicks realizados).</span></span></label>
+    </fieldset>
+    <div class="actions">
+      <button class="btn" type="button" id="pol-change-cancel">Cancelar</button>
+      <button class="btn primary" type="button" id="pol-change-ok">Aplicar cambio</button>
+    </div>
+  </dialog>
+<script src="common.js"></script>
 <script src="dashboard.js"></script>
+<script src="config.js"></script>
+<script src="curl.js"></script>
+<script src="policies.js"></script>
+<script src="captures.js"></script>
+<script src="ops.js"></script>
+<script src="home.js"></script>
+<script src="compliance.js"></script>
+<script src="audit.js"></script>
+<script src="env.js"></script>
+<script>CM.start();</script>
 </body>
 </html>

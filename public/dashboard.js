@@ -32,6 +32,8 @@
     page: 0,
     nextCursor: null,
     timer: null,
+    policy: "",
+    policyNames: new Map(),
   };
 
   // ---------- Formato ----------
@@ -446,6 +448,26 @@
       for (const [k, v] of Object.entries(SMS_STATUS)) sel.appendChild(el("option", { value: k }, v));
     }
     sel.value = state.filter;
+    $("tbl-policy").hidden = state.tab !== "sms";
+  }
+
+  // Nombres de las politicas para la columna y el filtro de "SMS procesados".
+  async function loadPolicies() {
+    try {
+      const data = await api("/admin/policies", new URLSearchParams());
+      state.policyNames = new Map(data.policies.map((p) => [p.id, p.name]));
+    } catch {
+      return; // Sin politicas igual se ve la tabla (con el id).
+    }
+    const sel = $("tbl-policy");
+    sel.replaceChildren(el("option", { value: "" }, "Todas las politicas"), el("option", { value: "ninguna" }, "Por defecto (sin politica)"));
+    for (const [id, name] of state.policyNames) sel.appendChild(el("option", { value: String(id) }, name));
+    sel.value = state.policy;
+  }
+
+  function policyLabel(id) {
+    if (id === null || id === undefined) return "Por defecto";
+    return state.policyNames.get(id) || `#${id} (borrada)`;
   }
 
   function outcomeTag(outcome) {
@@ -483,7 +505,7 @@
   function renderSmsTable(items) {
     const table = el("table");
     const head = el("tr");
-    for (const h of ["Ingreso", "Estado", "Resultado", "Intentos", "Cliente", "Texto", "Envio"]) head.appendChild(el("th", null, h));
+    for (const h of ["Ingreso", "Estado", "Resultado", "Intentos", "Clicks", "Politica", "Cliente", "Texto", "Envio"]) head.appendChild(el("th", null, h));
     table.appendChild(el("thead")).appendChild(head);
     const body = table.appendChild(el("tbody"));
     for (const s of items) {
@@ -495,6 +517,8 @@
       if (s.lastOutcome) res.appendChild(outcomeTag(s.lastOutcome));
       else res.textContent = "—";
       tr.appendChild(el("td", { class: "num" }, s.attempts));
+      tr.appendChild(el("td", { class: "num", title: "Clicks realizados sobre este SMS: visitas a las que el sitio respondio 200 (mas de 1 si una politica nueva lo volvio a elegir con \"cuenta como otro click\")" }, s.clicks));
+      tr.appendChild(el("td", null, policyLabel(s.policyId)));
       tr.appendChild(el("td", null, s.client || "—"));
       tr.appendChild(el("td", { class: "text" }, s.text || "—"));
       tr.appendChild(el("td", { class: "time" }, fmtDate(s.edrDate)));
@@ -507,6 +531,7 @@
     const params = rangeParams();
     params.set("limit", "25");
     if (state.filter) params.set(state.tab === "checks" ? "group" : "status", state.filter);
+    if (state.tab === "sms" && state.policy) params.set("policy", state.policy);
     const cursor = state.cursors[state.page];
     if (cursor) params.set("cursor", cursor);
     try {
@@ -605,6 +630,12 @@
     });
   }
 
+  $("tbl-policy").addEventListener("change", (e) => {
+    state.policy = e.target.value;
+    resetPaging();
+    loadTable();
+  });
+
   $("tbl-filter").addEventListener("change", (e) => {
     state.filter = e.target.value;
     resetPaging();
@@ -630,7 +661,7 @@
     } catch {
       // Sin sessionStorage el token no se recuerda entre recargas.
     }
-    refreshAll();
+    if (CM.currentView() === "reportes") refreshAll();
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -653,6 +684,14 @@
   }
 
   setFilterOptions();
-  refreshAll();
-  schedule();
+  // Solo se consulta mientras la seccion de reportes esta a la vista.
+  CM.onEnter("reportes", () => {
+    loadPolicies();
+    refreshAll();
+    schedule();
+  });
+  CM.onLeave("reportes", () => {
+    clearInterval(state.timer);
+    state.timer = null;
+  });
 })();
