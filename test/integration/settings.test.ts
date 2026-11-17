@@ -123,6 +123,22 @@ describe("settings store", () => {
     assert.equal(config.scheduler.windowMinutes, original);
   });
 
+  test("un texto que parece numero (producto 1300) se guarda y se aplica como texto", async () => {
+    const original = config.edr.clientProductId;
+    assert.deepEqual(await settingsStore.save({ set: { "edr.clientProductId": "1300" } }, actor), ["edr.clientProductId"]);
+    assert.equal(config.edr.clientProductId, "1300");
+    // Releer de la base (otra instancia) no lo convierte en numero ni lo descarta.
+    await settingsStore.reload();
+    assert.equal(config.edr.clientProductId, "1300");
+    const view = settingsStore.list().settings.find((x) => x.key === "edr.clientProductId");
+    assert.equal(view?.source, "base");
+    assert.equal(view?.value, "1300");
+    const res = await http("GET", "/admin/audit?entity=setting");
+    assert.equal(res.body.items[0].newValue, "1300");
+    await settingsStore.save({ reset: ["edr.clientProductId"] }, actor);
+    assert.equal(config.edr.clientProductId, original);
+  });
+
   test("los opcionales aceptan null y quedan undefined en config", async () => {
     await settingsStore.save({ set: { "edr.country": null } }, actor);
     assert.equal(config.edr.country, undefined);

@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "util";
 import type { RowDataPacket } from "mysql2";
 import { config } from "../config";
 import { pool, withTransaction } from "../db/pool";
-import { insertAudit, parseJsonColumn, type Actor, type AuditEntry } from "../db/auditRepo";
+import { insertAudit, parseJsonText, type Actor, type AuditEntry } from "../db/auditRepo";
 import { errorMessage, log } from "../logger";
 import {
   GROUP_LABELS,
@@ -87,14 +87,22 @@ export class SettingsStore {
   /** Lee app_settings y aplica. Devuelve las claves que cambiaron. */
   async reload(): Promise<string[]> {
     const [rows] = await pool.query<RowDataPacket[]>(
-      "SELECT setting_key, value, updated_at, updated_by FROM app_settings"
+      // Como texto: ver parseJsonText (si no, "1300" vuelve como numero y se descarta).
+      "SELECT setting_key, CAST(value AS CHAR) AS value, updated_at, updated_by FROM app_settings"
     );
     const next = new Map<string, Override>();
     for (const row of rows) {
       const def = SETTINGS_BY_KEY.get(row.setting_key);
       // Claves viejas (sacadas del catalogo) se ignoran: no hay donde aplicarlas.
       if (!def) continue;
-      const parsed = def.schema.safeParse(parseJsonColumn(row.value));
+      let raw: unknown;
+      try {
+        raw = parseJsonText(row.value);
+      } catch {
+        log.warn("settings: valor ilegible en la base, se ignora", { key: def.key });
+        continue;
+      }
+      const parsed = def.schema.safeParse(raw);
       if (!parsed.success) {
         log.warn("settings: valor invalido en la base, se ignora", { key: def.key });
         continue;

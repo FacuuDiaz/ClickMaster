@@ -64,6 +64,18 @@ export async function auditBestEffort(entry: AuditEntry, actor: Actor): Promise<
 }
 
 // MariaDB devuelve las columnas JSON como texto; MySQL ya parseadas.
+/**
+ * Valor de una columna JSON leida como texto (`CAST(col AS CHAR)`): se
+ * decodifica UNA vez. Hace falta leerla como texto porque MySQL la devuelve ya
+ * decodificada y MariaDB como texto: decodificar dos veces convierte el texto
+ * "1300" en el numero 1300.
+ */
+export function parseJsonText(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") return value;
+  return JSON.parse(value);
+}
+
 export function parseJsonColumn(value: unknown): unknown {
   if (typeof value !== "string") return value ?? null;
   try {
@@ -102,7 +114,8 @@ export async function listAudit(filters: {
     params.push(filters.beforeId);
   }
   const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT id, at, actor, ip, entity, action, ref, old_value, new_value
+    `SELECT id, at, actor, ip, entity, action, ref,
+            CAST(old_value AS CHAR) AS old_value, CAST(new_value AS CHAR) AS new_value
        FROM config_audit
       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY id DESC
@@ -117,8 +130,8 @@ export async function listAudit(filters: {
     entity: r.entity,
     action: r.action,
     ref: r.ref,
-    oldValue: parseJsonColumn(r.old_value),
-    newValue: parseJsonColumn(r.new_value),
+    oldValue: parseJsonText(r.old_value),
+    newValue: parseJsonText(r.new_value),
   }));
   return { items, nextBeforeId: rows.length > filters.limit ? items[items.length - 1].id : null };
 }
