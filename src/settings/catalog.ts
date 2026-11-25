@@ -12,10 +12,11 @@ import { parseDays } from "../policies/visitHours";
  * base, puerto, pool de reportes y zona horaria (cambiarla corre todas las
  * fechas de la API).
  */
-export type SettingGroup = "edr" | "scheduler" | "worker" | "horario" | "checker" | "clicker" | "capture";
+export type SettingGroup = "edr" | "alarisRest" | "scheduler" | "worker" | "horario" | "checker" | "clicker" | "capture";
 
 export const GROUP_LABELS: Record<SettingGroup, string> = {
   edr: "Fuente Alaris",
+  alarisRest: "Alaris REST (dia anterior)",
   scheduler: "Ingesta automatica",
   worker: "Worker y Chromium",
   horario: "Horario de visitas",
@@ -182,6 +183,14 @@ export const SETTINGS: SettingDef[] = [
     description: "Hora de Alaris, formato HH:MM." }, z.string().trim().regex(HHMM, "formato HH:MM")),
   str({ path: "visitHours.to", group: "horario", label: "Hasta", env: "VISIT_TO",
     description: "Hora de Alaris, formato HH:MM (24:00 = fin del dia). Tiene que ser posterior a \"Desde\"." }, z.string().trim().regex(HHMM, "formato HH:MM")),
+
+  // ---------- Alaris REST ----------
+  str({ path: "alarisRest.url", group: "alarisRest", label: "URL de la REST API", env: "ALARIS_REST_URL", nullable: true,
+    description: "Base de la REST API de la plataforma (ej. https://host/rest). La usa la base \"dia anterior\" para pedir sms_usage_stats. La credencial va en ALARIS_REST_AUTH (.env). Vacio = se usa el conteo local de ayer." }, httpUrl),
+  str({ path: "alarisRest.productId", group: "alarisRest", label: "Producto (product_id)", env: "ALARIS_REST_PRODUCT_ID", nullable: true,
+    description: "product_id de sms_usage_stats. Vacio = el client_product_id de la fuente Alaris." }, z.string().trim().min(1).max(32)),
+  int({ path: "alarisRest.timeoutMs", group: "alarisRest", label: "Timeout del pedido", env: "ALARIS_REST_TIMEOUT_MS", unit: "ms", min: 1000, max: 600000,
+    description: "Si Alaris no responde se usa el conteo local de ayer y se reintenta en 15 minutos." }),
 
   // ---------- Capturas ----------
   def("enum", { path: "capture.mode", group: "capture", label: "Que respuestas guardar", env: "EDR_CAPTURE_MODE",

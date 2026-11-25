@@ -285,6 +285,37 @@ const CREATE_POLICY_CHANGES = `
   );
 `;
 
+// Cuantos SMS mando un producto un dia (count_ok de sms_usage_stats de la
+// REST API de Alaris), hora por hora. Ayer no cambia: se pide una vez (y se
+// repite unas horas despues por si los cubos llegaban atrasados).
+const CREATE_ALARIS_USAGE_DAYS = `
+  CREATE TABLE IF NOT EXISTS alaris_usage_days (
+    product_id  VARCHAR(32)   NOT NULL,
+    day         CHAR(10)      NOT NULL,
+    status      ENUM('ok','error') NOT NULL,
+    hourly      TEXT          NULL,
+    total_ok    BIGINT        NULL,
+    error       VARCHAR(512)  NULL,
+    fetched_at  DATETIME(3)   NOT NULL,
+    PRIMARY KEY (product_id, day)
+  );
+`;
+
+// Cuantos SMS llegaron por minuto (de edr_date), con y sin link, y cuantos
+// tomo la politica activa. Se escribe siempre al ingestar (solo minutos
+// completos de la ventana: reingestar un rango reescribe el mismo valor).
+// Con la base semana_referencia es lo unico que queda de los no elegidos.
+const CREATE_INGEST_MINUTE_COUNTS = `
+  CREATE TABLE IF NOT EXISTS ingest_minute_counts (
+    minute_start DATETIME     NOT NULL PRIMARY KEY,
+    total        INT UNSIGNED NOT NULL,
+    with_link    INT UNSIGNED NOT NULL,
+    policy_id    INT UNSIGNED NULL,
+    matched      INT UNSIGNED NOT NULL,
+    updated_at   DATETIME(3)  NOT NULL
+  );
+`;
+
 const CREATE_EDR_CAPTURES = `
   CREATE TABLE IF NOT EXISTS edr_captures (
     id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -341,6 +372,8 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(CREATE_POLICIES);
   await pool.query(CREATE_EDR_CAPTURES);
   await pool.query(CREATE_POLICY_CHANGES);
+  await pool.query(CREATE_ALARIS_USAGE_DAYS);
+  await pool.query(CREATE_INGEST_MINUTE_COUNTS);
 
   for (const column of SMS_LINK_CHECKS_COLUMNS) {
     if (!(await columnExists("sms_link_checks", column.name))) {

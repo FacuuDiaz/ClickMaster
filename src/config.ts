@@ -76,6 +76,14 @@ function edrAuth(url: string): string | undefined {
   return auth;
 }
 
+// REST API de la plataforma Alaris (no la eapi): Authorization Basic. Acepta
+// "usuario:clave" (se codifica aca) o el base64 ya armado.
+function basicAuth(name: string): string | undefined {
+  const raw = optional(name);
+  if (!raw) return undefined;
+  return raw.includes(":") ? Buffer.from(raw, "utf8").toString("base64") : raw;
+}
+
 // Argumentos extra (o que pisan a los de arriba) para el "args" del JSON-RPC,
 // como objeto JSON. Ej: {"client_product_id": 1286} para mandarlo numerico.
 function jsonObject(name: string): Record<string, unknown> {
@@ -138,6 +146,19 @@ export const config = {
     // Si una respuesta llega al tope se pide la pagina siguiente desde la
     // fecha del ultimo registro. Tope de paginas por rango (contra loops).
     maxPagesPerWindow: int("EDR_MAX_PAGES_PER_WINDOW", 50, 1, 10_000),
+  },
+
+  // REST API de la plataforma (sms_usage_stats): cuantos SMS mando el
+  // producto ayer, hora por hora, para la base "dia_anterior". Sin url o sin
+  // auth esa base usa el conteo local de ayer (src/policies/previousDay.ts).
+  alarisRest: {
+    // Base de la API, ej. https://host/rest (se le agrega /sms_usage_stats).
+    url: optional("ALARIS_REST_URL"),
+    // Nunca se loguea ni se devuelve.
+    auth: basicAuth("ALARIS_REST_AUTH"),
+    // product_id del pedido. Vacio = el de EDR_CLIENT_PRODUCT_ID.
+    productId: optional("ALARIS_REST_PRODUCT_ID"),
+    timeoutMs: int("ALARIS_REST_TIMEOUT_MS", 30000, 1000, 600000),
   },
 
   // Copias temporales de las respuestas de Alaris para inspeccionarlas y

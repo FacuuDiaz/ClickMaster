@@ -22,6 +22,17 @@ export function httpPost(
   headers: Record<string, string>,
   timeoutMs: number
 ): Promise<HttpResponse> {
+  return httpRequest("POST", url, body, headers, timeoutMs);
+}
+
+/** Igual que httpPost, para cualquier metodo (la REST API de Alaris es GET). */
+export function httpRequest(
+  method: string,
+  url: string,
+  body: string | null,
+  headers: Record<string, string>,
+  timeoutMs: number
+): Promise<HttpResponse> {
   const target = new URL(url);
   const client = target.protocol === "https:" ? https : http;
 
@@ -29,8 +40,8 @@ export function httpPost(
     const req = client.request(
       target,
       {
-        method: "POST",
-        headers: { ...headers, "Content-Length": Buffer.byteLength(body) },
+        method,
+        headers: body === null ? headers : { ...headers, "Content-Length": Buffer.byteLength(body) },
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -56,6 +67,7 @@ export function httpPost(
       clearTimeout(timer);
       reject(err);
     });
-    req.end(body);
+    if (body === null) req.end();
+    else req.end(body);
   });
 }

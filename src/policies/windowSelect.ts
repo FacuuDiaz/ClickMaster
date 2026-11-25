@@ -8,6 +8,8 @@ import { nextAllowedAt, periodStarts } from "./schedule";
 import { HELD } from "./select";
 import { dayCurve, pick } from "./strategies";
 import { weeklyBaseline } from "./historical";
+import { linkRatio, referenceVolume, SOURCE_LABEL } from "./previousDay";
+import { keyOf, refDayFor } from "./referenceWeek";
 import type { Policy, Strategy } from "./schema";
 
 /**
@@ -20,6 +22,8 @@ import type { Policy, Strategy } from "./schema";
  * - base "semana_anterior": igual, por ventana, pero la cantidad sale de la
  *   cuota diaria (X % del mismo dia de la semana anterior) repartida en el
  *   dia segun la estrategia.
+ * - base "dia_anterior": igual, por ventana; la cantidad copia la curva
+ *   horaria de ayer (policies/previousDay.ts).
  * - base "dia_vencido": cuando cerro el dia, sobre todos los SMS del dia
  *   (sweepClosedDays, en cada chequeo del scheduler).
  *
@@ -51,7 +55,7 @@ export interface Group {
  * rango pedido: Alaris puede devolver el segundo del fin y no hay otra
  * ventana que lo vaya a elegir enseguida).
  */
-type Chunk = TimeWindow & { inclusive?: boolean };
+export type Chunk = TimeWindow & { inclusive?: boolean };
 
 function addResult(total: SelectResult, r: SelectResult): void {
   total.approved += r.approved;
@@ -127,7 +131,7 @@ async function updateIds(conn: DbConnection, ids: number[], sql: string, params:
  * proxima franja de la politica; el resto, skipped. Solo toca filas que
  * siguen en_seleccion (si otra instancia ya las eligio, no hace nada).
  */
-async function apply(policy: Policy | null, ids: number[], chosen: number[], now: Date): Promise<SelectResult> {
+export async function apply(policy: Policy | null, ids: number[], chosen: number[], now: Date): Promise<SelectResult> {
   return withTransaction(async (conn) => {
     const cap = await remainingCap(conn, policy, now);
     const approved = chosen.slice(0, Number.isFinite(cap) ? cap : chosen.length);
@@ -205,6 +209,45 @@ async function weeklyQuota(policy: Policy, chunk: TimeWindow, n: number): Promis
 }
 
 /**
+ * Cuantos visitar en una ventana de las bases con referencia horaria
+ * (dia_anterior: ayer; semana_referencia: el mismo dia de la semana elegida).
+ * Al fin de la ventana se apunta a X % de los SMS de la referencia hasta esa
+ * misma hora, por la proporcion de SMS que la politica puede tomar entre todos
+ * los ingeridos hoy; se resta lo ya aprobado hoy. Lo que falte (porque hoy
+ * llego menos) queda para las ventanas siguientes.
+ *
+ * `includeChunk`: lo ya aprobado incluye esta misma ventana (seleccion en
+ * memoria: si la ventana se reintenta, no se elige de mas).
+ */
+export async function referenceQuota(
+  policy: Policy,
+  chunk: Chunk,
+  n: number,
+  now: Date,
+  opts: { includeChunk?: boolean } = {}
+): Promise<Quota> {
+  const sel = policy.rules.selection;
+  const day = dayOf(chunk.start);
+  const elapsed = chunk.end.getTime() - day.start.getTime();
+  const refStart =
+    sel.base === "semana_referencia" && sel.weekStart ? refDayFor(chunk.start, sel.weekStart) : new Date(day.start.getTime() - DAY_MS);
+  const refLabel = sel.base === "semana_referencia" ? `del ${keyOf(refStart)}` : "de ayer";
+  const ref = await referenceVolume(refStart, new Date(refStart.getTime() + elapsed), pool, now);
+  const range = { start: day.start, end: chunk.end, inclusive: chunk.inclusive };
+  const ratio = await linkRatio(policy.id, day.start, chunk.end, () => countCandidates(policy.id, range), chunk.inclusive);
+  const target = Math.round((sel.percentage / 100) * ratio * ref.volume);
+  const doneEnd = opts.includeChunk ? new Date(chunk.end.getTime() + (chunk.inclusive ? 1000 : 0)) : chunk.start;
+  const done = await approvedIn(policy.id, day.start, doneEnd);
+  return {
+    count: Math.max(0, Math.min(n, target - done)),
+    strategy: sel.strategy,
+    note:
+      `objetivo acumulado ${target} (${sel.percentage}% de ${Math.round(ref.volume)} SMS ${refLabel} hasta esta hora, ` +
+      `${SOURCE_LABEL[ref.source]}, x ${Math.round(ratio * 1000) / 10}% con link hoy), ya aprobados ${done}`,
+  };
+}
+
+/**
  * X % de los `n` SMS de la ventana, arrastrando el redondeo dentro del dia:
  * se redondea el acumulado (SMS de la politica desde las 00:00 hasta el fin
  * de esta ventana) y se resta lo que ya correspondia antes. Asi 10 ventanas
@@ -217,7 +260,7 @@ export async function carriedCount(policyId: number | null, chunk: TimeWindow, n
   return Math.max(0, Math.min(n, share(before + n) - share(before)));
 }
 
-export async function quotaFor(group: Group, chunk: TimeWindow): Promise<Quota> {
+export async function quotaFor(group: Group, chunk: Chunk, now = new Date()): Promise<Quota> {
   const { policy, n } = group;
   if (!policy) {
     const count = await carriedCount(group.policyId, chunk, n, config.checker.clickPercentage);
@@ -226,6 +269,7 @@ export async function quotaFor(group: Group, chunk: TimeWindow): Promise<Quota> 
   const sel = policy.rules.selection;
   if (sel.action === "no_visitar") return { count: 0, strategy: sel.strategy, note: "no visitar" };
   if (sel.base === "semana_anterior") return weeklyQuota(policy, chunk, n);
+  if (sel.base === "dia_anterior" || sel.base === "semana_referencia") return referenceQuota(policy, chunk, n, now);
   const count = await carriedCount(policy.id, chunk, n, sel.percentage);
   return { count, strategy: sel.strategy, note: `${sel.percentage}% de ${n} (con arrastre del dia)` };
 }
@@ -248,7 +292,7 @@ export async function selectHeld(
   for (const chunk of selectionChunks(range, config.scheduler.windowMinutes, config.edr.timezoneOffsetMinutes)) {
     for (const group of await heldGroups(chunk)) {
       if (isDaily(group)) continue;
-      const quota = await quotaFor(group, chunk);
+      const quota = await quotaFor(group, chunk, now);
       const ids = await heldIds(group.policyId, chunk);
       const result = await apply(group.policy, ids, pick(ids, quota.count, quota.strategy), now);
       add(result);

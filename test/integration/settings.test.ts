@@ -132,6 +132,8 @@ describe("settings store", () => {
       "edr.cursorName": "get_sms_edr_v2",
       "edr.clientProductId": "1300",
       "edr.country": "Chile",
+      "alarisRest.url": "https://alaris.invalid/rest",
+      "alarisRest.productId": "1300",
       "scheduler.startDate": "2026.11.01 00:00:00",
       "visitHours.days": "lun-mie",
       "visitHours.from": "08:00",

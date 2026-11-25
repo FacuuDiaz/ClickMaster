@@ -114,7 +114,7 @@ export async function retakeDay(periodStart: Date, repeat: RepeatMode, now: Date
     for (const group of await candidateGroups({ start: chunk.start, end: new Date(chunk.end.getTime() + (chunk.inclusive ? 1000 : 0)) })) {
       const sel = group.policy?.rules.selection;
       if (sel?.action === "visitar" && sel.base === "dia_vencido") continue;
-      const quota = await quotaFor(group, chunk);
+      const quota = await quotaFor(group, chunk, now);
       const r = await reselect(group.policy, group.policyId, chunk, quota.count, quota.strategy, repeat, now);
       result.approved += r.approved;
       result.skipped += r.skipped;

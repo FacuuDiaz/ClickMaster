@@ -81,6 +81,7 @@ function envGroups(): { group: string; description: string; items: EnvItem[] }[]
       items: [
         secret("EDR_AUTH", "Credencial (params.auth)", config.edr.auth, "Base64 de usuario:clave. Sin ella la app no arranca contra la API real."),
         secret("API_TOKEN", "Bearer opcional", config.edr.bearerToken, "Solo si Alaris pide ademas un header Authorization."),
+        secret("ALARIS_REST_AUTH", "REST API (Basic)", config.alarisRest.auth, "usuario:clave (o su base64) de la REST API de la plataforma, para sms_usage_stats (base \"dia anterior\"). Sin ella se usa el conteo local de ayer."),
       ],
     },
     {

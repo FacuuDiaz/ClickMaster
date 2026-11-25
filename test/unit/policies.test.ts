@@ -106,12 +106,12 @@ describe("politicas: asignacion en la ingesta", () => {
 describe("politicas: esquema de seleccion", () => {
   test("defaults: 20% de cada ventana, intercalado", () => {
     const sel = rulesSchema.parse({}).selection;
-    assert.deepEqual(sel, { action: "visitar", percentage: 20, base: "ventana", weeks: 1, strategy: "intercalado" });
+    assert.deepEqual(sel, { action: "visitar", percentage: 20, base: "ventana", weeks: 1, strategy: "intercalado", weekStart: null });
   });
 
   test("convierte el formato anterior (percentage: { mode, ... })", () => {
     assert.deepEqual(rulesSchema.parse({ selection: { percentage: { mode: "fijo", value: 35 } } }).selection, {
-      action: "visitar", percentage: 35, base: "ventana", weeks: 1, strategy: "aleatorio",
+      action: "visitar", percentage: 35, base: "ventana", weeks: 1, strategy: "aleatorio", weekStart: null,
     });
     const hist = rulesSchema.parse({ selection: { percentage: { mode: "historico", value: 250, reference: "semana_anterior", fallback: 5 } } }).selection;
     assert.equal(hist.base, "semana_anterior");
@@ -184,5 +184,25 @@ describe("horario global de visitas", () => {
     assert.deepEqual(parseDays("todos"), [0, 1, 2, 3, 4, 5, 6]);
     assert.equal(parseDays("lunes-x"), null);
     assert.equal(parseDays(""), null);
+  });
+});
+
+describe("sms_usage_stats", () => {
+  test("parseUsage suma count_ok por hora del dia y rechaza respuestas que no son lista", async () => {
+    const { parseUsage } = await import("../../src/alaris/usageStats");
+    const dayStart = new Date("2026-11-15T03:00:00Z"); // 00:00 GMT-3
+    const usage = parseUsage(
+      JSON.stringify([
+        { dcheck: "2026.11.15 00:00:00", count_ok: "3", is_total: 0 },
+        { dcheck: "2026.11.15 23:00:00", count_ok: 4, is_total: 0 },
+        { dcheck: "2026.11.16 00:00:00", count_ok: 100, is_total: 0 },
+        { country: "Total", count_ok: 107, is_total: 1 },
+      ]),
+      dayStart
+    );
+    assert.equal(usage.hourly[0], 3);
+    assert.equal(usage.hourly[23], 4);
+    assert.equal(usage.total, 7);
+    assert.throws(() => parseUsage(JSON.stringify({ error: "x" }), dayStart), /se esperaba una lista/);
   });
 });

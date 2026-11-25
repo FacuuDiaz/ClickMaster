@@ -3,6 +3,7 @@ import type { RowDataPacket } from "mysql2";
 import { config } from "../../src/config";
 import { pool } from "../../src/db/pool";
 import { ensureSchema } from "../../src/db/schema";
+import { clearReferenceCache } from "../../src/policies/previousDay";
 
 // Los tests truncan tablas: jamas contra una base que no sea de test.
 function assertTestDatabase(): void {
@@ -26,7 +27,8 @@ export async function setupTestDb(): Promise<void> {
 
 export async function resetTables(): Promise<void> {
   assertTestDatabase();
-  for (const table of ["sms_link_checks", "sms_processing", "sync_runs", "sms_content", "app_settings", "config_audit", "policies", "edr_captures", "policy_changes"]) {
+  clearReferenceCache();
+  for (const table of ["sms_link_checks", "sms_processing", "sync_runs", "sms_content", "app_settings", "config_audit", "policies", "edr_captures", "policy_changes", "alaris_usage_days", "ingest_minute_counts"]) {
     await pool.query(`TRUNCATE TABLE ${table}`);
   }
 }

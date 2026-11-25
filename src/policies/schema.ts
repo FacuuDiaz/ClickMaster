@@ -45,8 +45,16 @@ export type Strategy = (typeof STRATEGIES)[number];
  * - semana_anterior: X % del total del mismo dia de la semana anterior (o
  *   el promedio de las ultimas N semanas); esa cantidad se reparte entre las
  *   ventanas de hoy segun la estrategia.
+ * - dia_anterior: X % de lo que mando el producto ayer (sms_usage_stats de
+ *   Alaris, por hora), escalado por la proporcion de SMS con link de hoy; se
+ *   visita entre los SMS de hoy copiando la curva horaria de ayer
+ *   (policies/previousDay.ts).
+ * - semana_referencia: igual que dia_anterior, pero la referencia es el
+ *   mismo dia de la semana (y hora) de una semana elegida (weekStart). Con
+ *   esta base activa solo se guardan los SMS elegidos: el resto se descarta
+ *   y queda contado en ingest_hour_counts (policies/referenceWeek.ts).
  */
-export const BASES = ["ventana", "dia_vencido", "semana_anterior"] as const;
+export const BASES = ["ventana", "dia_vencido", "semana_anterior", "dia_anterior", "semana_referencia"] as const;
 export type SelectionBase = (typeof BASES)[number];
 
 export const selectionSchema = z.preprocess(
@@ -72,6 +80,18 @@ export const selectionSchema = z.preprocess(
       // Solo semana_anterior: promedio del mismo dia de las ultimas N semanas.
       weeks: z.number().int().min(1).max(4).default(1),
       strategy: z.enum(STRATEGIES).default("intercalado"),
+      // Solo semana_referencia: primer dia (hora de Alaris) de la semana de referencia.
+      weekStart: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, "formato YYYY-MM-DD")
+        .refine((v) => !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().startsWith(v), "fecha invalida")
+        .nullable()
+        .default(null),
+    })
+    .superRefine((sel, ctx) => {
+      if (sel.action === "visitar" && sel.base === "semana_referencia" && !sel.weekStart) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["weekStart"], message: "elegi el primer dia de la semana de referencia" });
+      }
     })
     .default({})
 );

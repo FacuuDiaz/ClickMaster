@@ -23,6 +23,11 @@ import { dayStartOf, selectHeld, sweepClosedDays } from "../policies/windowSelec
 import { runPendingChanges } from "../policies/retake";
 import type { Policy } from "../policies/schema";
 import { insertCaptureSafe } from "../captures/repo";
+import { MinuteCounter, saveMinuteCounts } from "../db/minuteCountsRepo";
+import { messageKey } from "../db/smsContentRepo";
+import { factsOf, matchPolicy } from "../policies/match";
+import { selectInMemory } from "../policies/discardSelect";
+import type { SmsRecord } from "../parser/smsRecordSchema";
 import { requestArgs } from "../fetcher/apiClient";
 
 export const INGEST_LOCK = "ingesta";
@@ -86,11 +91,25 @@ export async function ingestWindow(
 
   try {
     const policies = await policiesCache.refresh().then(() => policiesCache.active());
-    await ingestRange(query, { policies, fetcher, now, runId, counters, invalidSamples, invalidRaw, ctx });
-    // Con la ventana entera en la base, recien ahora se elige cuales visitar.
-    const selected = await selectHeld(query, now(), { ctx });
-    counters.jobsCreated += selected.approved;
-    counters.jobsSkipped += selected.skipped;
+    const minutes = new MinuteCounter(window);
+    // semana_referencia: se elige en memoria y solo se guardan los elegidos.
+    const buffer = discardMode(policies) ? new Map<string, SmsRecord>() : null;
+    await ingestRange(query, { policies, fetcher, now, runId, counters, invalidSamples, invalidRaw, ctx, minutes, buffer });
+    // Antes de elegir: la proporcion con link de las cuotas sale de aca.
+    await saveMinuteCounts(minutes, policies[0]?.id ?? null, now());
+    if (buffer) {
+      const selected = await selectInMemory([...buffer.values()], query, policies, runId, now(), ctx);
+      buffer.clear();
+      counters.smsNew += selected.smsNew;
+      counters.smsExisting += selected.smsExisting;
+      counters.jobsCreated += selected.approved;
+      counters.jobsSkipped += selected.skipped + selected.discarded;
+    } else {
+      // Con la ventana entera en la base, recien ahora se elige cuales visitar.
+      const selected = await selectHeld(query, now(), { ctx });
+      counters.jobsCreated += selected.approved;
+      counters.jobsSkipped += selected.skipped;
+    }
     status = counters.recordsInvalid > 0 ? "partial" : "success";
     if (status === "partial") {
       error = `${counters.recordsInvalid} registros invalidos. Ej: ${invalidSamples.join(" | ")}`;
@@ -150,6 +169,16 @@ interface RangeContext {
   // Registros crudos invalidos (con tope) para la captura.
   invalidRaw: unknown[];
   ctx: Record<string, unknown>;
+  // Conteo por minuto de lo que llega (todas las politicas).
+  minutes: MinuteCounter;
+  // Modo descarte: los registros validos se juntan aca en vez de guardarse.
+  buffer: Map<string, SmsRecord> | null;
+}
+
+/** La politica activa (una sola) es semana_referencia y visita. */
+export function discardMode(policies: Policy[]): boolean {
+  const sel = policies[0]?.rules.selection;
+  return Boolean(sel && sel.action === "visitar" && sel.base === "semana_referencia");
 }
 
 const MAX_INVALID_CAPTURED = 2000;
@@ -310,6 +339,17 @@ async function processRecords(records: unknown[], rc: RangeContext): Promise<voi
       }
     }
 
+    for (const r of valid) {
+      const facts = factsOf(r);
+      const policy = facts.link ? matchPolicy(rc.policies, facts) : null;
+      rc.minutes.add(new Date(r.edr_date), Boolean(facts.link), Boolean(policy && policy.rules.selection.action === "visitar"));
+    }
+    if (rc.buffer) {
+      // Si la misma identidad viene dos veces gana la ultima (la mas nueva).
+      for (const r of valid) rc.buffer.set(messageKey(r.client_message_id, r.vendor_message_id), r);
+      await heartbeatRun(rc.runId, rc.counters, rc.now());
+      continue;
+    }
     const result = await persistSmsBatch(valid, rc.runId, rc.policies, rc.now());
     rc.counters.smsNew += result.smsNew;
     rc.counters.smsExisting += result.smsExisting;

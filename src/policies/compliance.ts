@@ -2,6 +2,8 @@ import { config } from "../config";
 import { reportsPool } from "../db/reportsPool";
 import { policyDayStats, recentRate, type PolicyDayRow } from "../db/complianceRepo";
 import { weeklyBaseline } from "./historical";
+import { linkRatio, referenceVolume, SOURCE_LABEL } from "./previousDay";
+import { keyOf, refDayFor } from "./referenceWeek";
 import { policiesCache } from "./repo";
 import { periodStarts } from "./schedule";
 import { withinVisitHours } from "./visitHours";
@@ -17,6 +19,8 @@ import type { Policy } from "./schema";
  *   redondeo, la suma de las ventanas da justo esto);
  * - dia vencido: X % de los SMS del dia; se eligen y visitan al dia siguiente;
  * - semana anterior: X % del mismo dia de la semana anterior (cuota diaria).
+ * - dia anterior: X % de los SMS de ayer (Alaris o conteo local) por la
+ *   proporcion del dia que tomo la politica.
  * Las visitas de un dia tienen hasta el fin del dia para hacerse (dia
  * vencido: hasta el fin del dia siguiente).
  */
@@ -30,7 +34,7 @@ export interface PolicyCompliance {
   policyId: number | null;
   name: string;
   deleted: boolean;
-  base: "ventana" | "dia_vencido" | "semana_anterior" | "por_defecto" | "no_visitar" | "desconocida";
+  base: "ventana" | "dia_vencido" | "semana_anterior" | "dia_anterior" | "semana_referencia" | "por_defecto" | "no_visitar" | "desconocida";
   percentage: number | null;
   strategy: string | null;
   baseCount: number | null;
@@ -102,6 +106,23 @@ async function targetFor(row: PolicyDayRow, policy: Policy | null, deleted: bool
   const sel = policy.rules.selection;
   if (sel.action === "no_visitar") {
     return { base: "no_visitar" as const, percentage: 0, strategy: null, baseCount: row.rejected, baseLabel: "SMS que la politica no visita", target: 0 };
+  }
+  if (sel.base === "dia_anterior" || sel.base === "semana_referencia") {
+    const refStart =
+      sel.base === "semana_referencia" && sel.weekStart ? refDayFor(day.start, sel.weekStart) : new Date(day.start.getTime() - DAY_MS);
+    const ref = await referenceVolume(refStart, new Date(refStart.getTime() + DAY_MS), reportsPool);
+    // Proporcion de los contadores por minuto (con semana_referencia los no
+    // elegidos no estan en sms_processing).
+    const ratio = await linkRatio(row.policyId as number, day.start, day.end, async () => row.candidates, false, reportsPool);
+    const label = sel.base === "semana_referencia" ? `SMS del ${keyOf(refStart)}` : "SMS del dia anterior";
+    return {
+      base: sel.base,
+      percentage: sel.percentage,
+      strategy: sel.strategy,
+      baseCount: Math.round(ref.volume),
+      baseLabel: `${label} (${SOURCE_LABEL[ref.source]}) x ${Math.round(ratio * 1000) / 10}% con link`,
+      target: Math.round((sel.percentage / 100) * ratio * ref.volume),
+    };
   }
   if (sel.base === "semana_anterior") {
     const baseline = await weeklyBaseline(policy, day.start, day.end, sel.weeks, reportsPool);

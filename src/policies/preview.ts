@@ -2,6 +2,10 @@ import type { RowDataPacket } from "mysql2";
 import { reportsPool } from "../db/reportsPool";
 import { factsOf, matchPolicy, type SmsFacts } from "./match";
 import { weeklyBaseline } from "./historical";
+import { config } from "../config";
+import { referenceVolume, SOURCE_LABEL } from "./previousDay";
+import { refDayFor } from "./referenceWeek";
+import { periodStarts } from "./schedule";
 import { STRATEGY_INFO } from "./strategies";
 import type { Policy } from "./schema";
 
@@ -67,6 +71,17 @@ export async function estimate(
         note = `${sel.percentage}% de cada ventana, ${how}`;
       } else if (sel.base === "dia_vencido") {
         note = `${sel.percentage}% del dia, ${how}: se eligen al dia siguiente`;
+      } else if (sel.base === "dia_anterior" || sel.base === "semana_referencia") {
+        const shift =
+          sel.base === "semana_referencia" && sel.weekStart
+            ? refDayFor(range.start, sel.weekStart).getTime() - periodStarts(range.start, config.edr.timezoneOffsetMinutes).day.getTime()
+            : -86_400_000;
+        const ref = await referenceVolume(new Date(range.start.getTime() + shift), new Date(range.end.getTime() + shift), db);
+        const ratio = facts.length > 0 ? n / facts.length : 0;
+        visits = Math.min(n, Math.round((sel.percentage / 100) * ratio * ref.volume));
+        note =
+          `${sel.percentage}% de ${Math.round(ref.volume)} SMS ${sel.base === "semana_referencia" ? "de la semana de referencia" : "de ayer"} en el mismo rango (${SOURCE_LABEL[ref.source]}), ` +
+          `x ${Math.round(ratio * 1000) / 10}% que toma la politica, ${how}`;
       } else {
         const baseline = await weeklyBaseline(policy, range.start, range.end, sel.weeks, db);
         if (baseline === null) {
