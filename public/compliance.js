@@ -8,6 +8,8 @@
     ventana: "Por ventana",
     dia_vencido: "Dia vencido",
     semana_anterior: "Semana anterior",
+    dia_anterior: "Dia anterior",
+    semana_referencia: "Semana de referencia",
     por_defecto: "Regla por defecto",
     no_visitar: "No visitar",
     desconocida: "Politica borrada",

@@ -76,6 +76,21 @@
           <dl class="home-facts" id="home-facts"></dl>
         </div>
 
+        <div class="card chart-card" id="home-week-card" hidden style="margin-bottom:14px">
+          <div class="home-week-head">
+            <div>
+              <h2>Semana de referencia</h2>
+              <p class="desc" id="home-week-desc"></p>
+            </div>
+            <button class="btn" type="button" id="home-week-refresh">Volver a bajar de Alaris</button>
+          </div>
+          <ul class="legend" id="home-week-legend"></ul>
+          <div class="chart" id="home-week-chart"></div>
+          <p class="result bad" id="home-week-error" hidden></p>
+          <dl class="home-facts" id="home-week-facts"></dl>
+          <details class="data"><summary>Ver los datos por hora</summary><div class="scroll tbl-wrap" id="home-week-table"></div></details>
+        </div>
+
         <div class="home-grid">
           <div class="card">
             <h2>Peticion a Alaris</h2>
@@ -744,6 +759,7 @@
 <script src="policies.js"></script>
 <script src="captures.js"></script>
 <script src="ops.js"></script>
+<script src="homeWeek.js"></script>
 <script src="home.js"></script>
 <script src="compliance.js"></script>
 <script src="audit.js"></script>

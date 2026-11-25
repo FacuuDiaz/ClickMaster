@@ -200,6 +200,8 @@
     ventana: "de cada ventana",
     dia_vencido: "del dia anterior (se elige al cerrar el dia)",
     semana_anterior: "del mismo dia de la semana anterior, repartido en el dia",
+    dia_anterior: "de lo que se mando ayer, hora por hora",
+    semana_referencia: "de la misma hora y dia de la semana de referencia (solo se guardan los elegidos, ventana de 1 hora)",
   };
   const activePolicy = () => policies.find((p) => p.enabled) || null;
   const selectedPolicy = () => policies.find((p) => String(p.id) === $("home-policy-select").value) || null;
@@ -301,6 +303,7 @@
       policies = pol.policies;
       fillPolicy();
       fillForm();
+      CM.homeWeek.load(activePolicy());
     } catch (err) {
       if (!err.auth) showBanner(errorText(err), { error: true });
     }

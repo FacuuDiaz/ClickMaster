@@ -36,7 +36,7 @@
       { id: "capturas", label: "Capturas", tabs: [["guardadas", "Guardadas"], ["pedir", "Pedir un rango"], ["ayuda", "Como funcionan"]] },
     ] },
     { group: "Sistema", items: [
-      { id: "configuracion", label: "Configuracion", tabs: [["edr", "Fuente Alaris"], ["scheduler", "Ingesta automatica"], ["worker", "Worker y Chromium"], ["horario", "Horario de visitas"], ["checker", "Verificacion"], ["clicker", "Clicks manuales"], ["capture", "Capturas"]] },
+      { id: "configuracion", label: "Configuracion", tabs: [["edr", "Fuente Alaris"], ["alarisRest", "Alaris REST"], ["scheduler", "Ingesta automatica"], ["worker", "Worker y Chromium"], ["horario", "Horario de visitas"], ["checker", "Verificacion"], ["clicker", "Clicks manuales"], ["capture", "Capturas"]] },
       { id: "entorno", label: "Entorno (.env)", tabs: [["variables", "Solo en .env"], ["pisadas", "Pisadas desde la web"], ["como", "Como cambiarlas"]] },
       { id: "historial", label: "Historial", tabs: [["todo", "Todo"], ["setting", "Configuracion"], ["policy", "Politicas"], ["action", "Acciones"], ["capture", "Capturas"]] },
     ] },

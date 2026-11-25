@@ -17,11 +17,15 @@
     ventana: "De cada ventana",
     dia_vencido: "Dia vencido (sobre los SMS de ayer)",
     semana_anterior: "Mismo dia de la semana anterior",
+    dia_anterior: "Dia anterior (curva horaria de ayer)",
+    semana_referencia: "Semana de referencia (por dia y hora)",
   };
   const BASE_HELP = {
     ventana: "Cuando la ventana llego completa se elige este % de todos sus SMS.",
     dia_vencido: "Cuando el dia cierra se elige este % de todos los SMS de ese dia, entre esos mismos SMS. Los de hoy no se visitan hasta manana.",
     semana_anterior: "Cuota del dia = este % del total del mismo dia de la semana anterior (o el promedio de N semanas). Se visita entre los SMS de hoy, repartida en el dia segun la estrategia. Sin datos de esa semana: este % de cada ventana.",
+    dia_anterior: "A cada hora de hoy le toca este % de lo que mando el producto ayer en esa misma hora (sms_usage_stats de Alaris; si no responde, lo ingerido ayer), escalado por la proporcion de SMS con link de hoy. Se visita entre los SMS de hoy; lo que falte en una hora pasa a la siguiente.",
+    semana_referencia: "Se baja de Alaris (sms_usage_stats) el trafico hora por hora de la semana elegida. A cada hora de hoy le toca este % de lo que hubo a esa hora el mismo dia de la semana de referencia (martes con martes), por la proporcion de SMS con link de hoy. El EDR se pide de a 1 hora (la ventana pasa a 60 min al activarla) y SOLO se guardan los SMS elegidos: el resto se descarta y queda contado por minuto. El Panel muestra el grafico de la semana.",
   };
   // Se completa con /admin/policies/strategies (etiquetas, descripcion y ejemplo).
   let strategies = null;
@@ -44,6 +48,8 @@
     if (sel.action === "no_visitar") lines.push("No se visitan");
     else if (sel.base === "ventana") lines.push(`Visita el ${sel.percentage}% de cada ventana, elegido sobre la ventana completa · ${how}`);
     else if (sel.base === "dia_vencido") lines.push(`Visita el ${sel.percentage}% del dia anterior, entre los SMS de ese dia (los de hoy se eligen manana) · ${how}`);
+    else if (sel.base === "semana_referencia") lines.push(`Visita hoy el ${sel.percentage}% de la misma hora y dia de la semana del ${weekText(sel.weekStart)}, escalado por la proporcion con link; solo guarda los elegidos · ${how}`);
+    else if (sel.base === "dia_anterior") lines.push(`Visita hoy el ${sel.percentage}% de lo que se mando ayer, hora por hora, escalado por la proporcion con link · ${how}`);
     else {
       const ref = sel.weeks > 1 ? `del promedio del mismo dia de las ultimas ${sel.weeks} semanas` : "del mismo dia de la semana anterior";
       lines.push(`Cuota del dia: ${sel.percentage}% del total ${ref}, repartida a lo largo de hoy · ${how}`);
@@ -186,6 +192,15 @@
         "Lo que la politica anterior ya mando a la cola o clickeo hoy se mantiene.",
       ];
     }
+    if (sel.base === "semana_referencia") {
+      return [
+        `Desde ahora solo se guardan los SMS elegidos: lo que no se elija se descarta (queda contado por minuto). La ventana de ingesta pasa a 1 hora.`,
+        "Las ventanas de hoy que ya llegaron se vuelven a elegir con la referencia de la semana, pero solo entre lo ya guardado.",
+      ];
+    }
+    if (sel.base === "dia_anterior") {
+      return ["El objetivo de cada hora de hoy se recalcula con la curva de ayer y las ventanas de hoy que ya llegaron se vuelven a elegir, descontando lo ya aprobado."];
+    }
     if (sel.base === "semana_anterior") {
       return ["La cuota del dia se recalcula con esta politica y las ventanas de hoy que ya llegaron se vuelven a elegir, descontando lo ya aprobado."];
     }
@@ -240,6 +255,7 @@
       loadChanges();
       CM.refreshSideStatus();
       if (!target) showBanner("Sin politica activa: el sistema queda en espera (no se piden SMS a Alaris ni se visitan links).");
+      if (data.windowChanged) showBanner("La ventana de ingesta paso a 1 hora (la semana de referencia elige sobre la hora entera).");
     } catch (err) {
       if (!err.auth) showBanner(errorText(err), { error: true });
     }
@@ -300,6 +316,29 @@
     } catch (err) {
       if (!err.auth) showBanner(errorText(err), { error: true });
     }
+  }
+
+  // ---------- Semana de referencia ----------
+
+  const WD = ["dom", "lun", "mar", "mie", "jue", "vie", "sab"];
+  const ymd = (d) => d.toISOString().slice(0, 10);
+  /** "lun 16/11 al dom 22/11" a partir de "2026-11-16". */
+  function weekText(start) {
+    if (!start) return "(sin elegir)";
+    const a = new Date(`${start}T12:00:00Z`);
+    const b = new Date(a.getTime() + 6 * 86_400_000);
+    const f = (d) => `${WD[d.getUTCDay()]} ${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    return `${f(a)} al ${f(b)}`;
+  }
+  /** Lunes de la ultima semana completa (hora de Alaris, GMT-3). */
+  function lastFullWeek() {
+    const today = new Date(Date.now() - 3 * 3_600_000);
+    const sinceMonday = (today.getUTCDay() + 6) % 7;
+    return ymd(new Date(today.getTime() - (sinceMonday + 7) * 86_400_000));
+  }
+  function weekClosed(start) {
+    const today = ymd(new Date(Date.now() - 3 * 3_600_000));
+    return ymd(new Date(new Date(`${start}T12:00:00Z`).getTime() + 7 * 86_400_000)) <= today;
   }
 
   // ---------- Editor ----------
@@ -380,12 +419,19 @@
     for (const st of strategies ? strategies.strategies : [{ id: sel.strategy, label: sel.strategy }]) strategy.append(el("option", { value: st.id }, st.label));
     strategy.value = sel.strategy;
 
+    const weekStart = el("input", { type: "date", id: "pol-week-start" });
+    weekStart.value = sel.weekStart || lastFullWeek();
+    weekStart.max = ymd(new Date(Date.now() - 3 * 3_600_000 - 7 * 86_400_000));
+
     const selBox = el("div", { class: "fields" });
     const fValue = field("Porcentaje", value);
     const fBase = field("Sobre que total", base);
     const fWeeks = field("Referencia", weeks);
+    const fWeekStart = field("Primer dia de la semana de referencia", weekStart);
+    const weekHint = el("span", { class: "muted", style: "font-size:12px" });
+    fWeekStart.append(weekHint);
     const fStrategy = field("Estrategia (cuales)", strategy);
-    selBox.append(field("Accion", action), fValue, fBase, fWeeks, fStrategy);
+    selBox.append(field("Accion", action), fValue, fBase, fWeeks, fWeekStart, fStrategy);
     const selHelp = el("p", { class: "muted", style: "margin:8px 0 0" });
     const strips = el("div", { class: "strips", role: "radiogroup", "aria-label": "Estrategias" });
 
@@ -411,10 +457,16 @@
       const visit = action.value === "visitar";
       for (const f of [fValue, fBase, fStrategy, strips]) f.hidden = !visit;
       fWeeks.hidden = !visit || base.value !== "semana_anterior";
+      fWeekStart.hidden = !visit || base.value !== "semana_referencia";
+      weekHint.textContent = !weekStart.value
+        ? "Elegi una fecha"
+        : weekClosed(weekStart.value)
+          ? `Del ${weekText(weekStart.value)}`
+          : `Del ${weekText(weekStart.value)}: la semana todavia no termino`;
       selHelp.textContent = visit ? BASE_HELP[base.value] : "Los SMS que coinciden quedan salteados (motivo: politica).";
       for (const b of strips.querySelectorAll(".strip")) b.setAttribute("aria-checked", String(b.querySelector("b").textContent === strategyLabel(strategy.value)));
     };
-    [action, base, strategy].forEach((x) => x.addEventListener("change", syncSel));
+    [action, base, strategy, weekStart].forEach((x) => x.addEventListener("change", syncSel));
     renderStrips();
     form.append(fieldset("Cuantos y cuales visita", selBox, selHelp, strips));
 
@@ -484,6 +536,7 @@
         base: base.value,
         weeks: Number(weeks.value),
         strategy: strategy.value,
+        weekStart: base.value === "semana_referencia" ? weekStart.value || null : sel.weekStart || null,
       };
       const parsedRanges = [];
       for (const line of lines("pol-ranges")) {
@@ -543,11 +596,12 @@
           if (!repeatMode) return;
           body.repeatMode = repeatMode;
         }
-        if (editing) await api(`/admin/policies/${editing.id}`, { method: "PUT", body });
-        else await api("/admin/policies", { method: "POST", body });
+        const saved = editing
+          ? await api(`/admin/policies/${editing.id}`, { method: "PUT", body })
+          : await api("/admin/policies", { method: "POST", body });
         closeEditor();
         hideBanner();
-        showBanner(`Politica "${body.name}" guardada.`);
+        showBanner(`Politica "${body.name}" guardada.${saved.windowChanged ? " La ventana de ingesta paso a 1 hora." : ""}`);
         await load();
       } catch (err) {
         errors.textContent = errorText(err);

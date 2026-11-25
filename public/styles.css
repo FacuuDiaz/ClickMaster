@@ -409,6 +409,8 @@
   .btn.big { padding: 10px 22px; font-size: 15px; font-weight: 600; }
   .home-facts { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0; padding-top: 14px; border-top: 1px solid var(--grid); }
   .home-facts div { min-width: 0; }
+  .home-week-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  #home-week-facts { margin-top: 12px; }
   .home-facts dt { color: var(--text-muted); font-size: 12px; }
   .home-facts dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
   .home-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }

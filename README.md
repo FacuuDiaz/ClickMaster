@@ -181,6 +181,24 @@ Cada política define:
     estrategia. Sin datos de esa semana usa X % de cada ventana. La referencia
     se cuenta por `policy_id`; si la política es nueva y toma todos los SMS, se
     usa el total de SMS con link.
+  - **Día anterior (curva horaria de ayer):** al llegar a la hora H de hoy se
+    apunta a X % de los SMS que mandó el producto ayer hasta la hora H, por la
+    proporción de SMS de la política (con link) entre todos los ingeridos hoy.
+    Lo de ayer sale de `sms_usage_stats` de la REST API de Alaris (`count_ok`,
+    cubos horarios, `ALARIS_REST_URL` + `ALARIS_REST_AUTH`; se guarda en
+    `alaris_usage_days`, se repite hasta 3 h después del cierre del día y, si
+    falla, a los 15 min). Sin REST API o si falla, usa lo ingerido ayer. Se
+    visita entre los SMS de hoy; lo que falte en una hora pasa a la siguiente.
+  - **Semana de referencia (por día y hora):** se elige una semana cerrada
+    (`weekStart`) y se bajan sus 7 días de `sms_usage_stats` hora por hora.
+    A cada hora de hoy le toca X % de lo que hubo a esa misma hora el mismo día
+    de la semana de referencia (martes con martes), por la proporción con link
+    de hoy. Con esta política activa la ventana de ingesta pasa a 60 min y
+    **solo se guardan los SMS elegidos**: la ventana se junta en memoria, se
+    elige con la estrategia y el resto se descarta (queda contado en
+    `ingest_minute_counts`). El Panel muestra el gráfico de la semana con lo de
+    hoy encima del día equivalente y un botón para volver a bajarla. Un cambio
+    de política a mitad del día solo puede re-elegir entre lo guardado.
 - **Cuáles visita (estrategia),** sobre los SMS del período ordenados por
   `edr_date` (`src/policies/strategies.ts`): intercalado (parejo), aleatorio,
   primeros, últimos, progresivo (más seguidos hacia el final), regresivo (al
@@ -266,7 +284,10 @@ cola, en selección, recortados por tope, visitados sin 200, sin elegir).
 - Objetivo con las reglas actuales de la política: *por ventana* y *por
   defecto* = X % de los SMS del día; *día vencido* = X % de los SMS del día,
   que se eligen y visitan al día siguiente; *semana anterior* = X % del mismo
-  día de la semana anterior.
+  día de la semana anterior; *día anterior* = X % de los SMS de ayer por la
+  proporción con link del día; *semana de referencia* = X % del mismo día de
+  la semana de referencia por la proporción con link (de los contadores por
+  minuto).
 - Plazo: fin del día (día vencido: fin del día siguiente). Si al ritmo del
   worker en la última hora la cola no termina dentro de las horas de visita que
   quedan (respeta el horario global), aparece un aviso.
