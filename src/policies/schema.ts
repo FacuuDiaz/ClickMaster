@@ -52,7 +52,7 @@ export type Strategy = (typeof STRATEGIES)[number];
  * - semana_referencia: igual que dia_anterior, pero la referencia es el
  *   mismo dia de la semana (y hora) de una semana elegida (weekStart). Con
  *   esta base activa solo se guardan los SMS elegidos: el resto se descarta
- *   y queda contado en ingest_hour_counts (policies/referenceWeek.ts).
+ *   y queda contado en ingest_minute_counts (policies/referenceWeek.ts).
  */
 export const BASES = ["ventana", "dia_vencido", "semana_anterior", "dia_anterior", "semana_referencia"] as const;
 export type SelectionBase = (typeof BASES)[number];
@@ -109,6 +109,10 @@ export const scheduleSchema = z
       )
       .max(12)
       .default([]),
+    // Repartir los clicks de cada ventana ingerida a lo largo de la ventana
+    // siguiente (sin contar el tiempo fuera de franja) en vez de mandarlos
+    // todos juntos: un solo get_edr por ventana y clicks parejos en el tiempo.
+    spread: z.boolean().default(false),
   })
   .default({});
 

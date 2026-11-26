@@ -58,6 +58,7 @@
     const allDays = s.days.length === 7;
     const ranges = s.ranges.map((x) => `${x.from}-${x.to}`).join(", ");
     if (!allDays || ranges) lines.push(`Horario: ${allDays ? "todos los dias" : s.days.map((d) => DAYS[d]).join(", ")}${ranges ? ` · ${ranges}` : " · todo el dia"}`);
+    if (s.spread) lines.push("Clicks repartidos a lo largo de cada ventana (no todos juntos)");
     const l = r.limits;
     if (l.perHour !== null || l.perDay !== null) {
       lines.push(`Topes: ${[l.perHour !== null ? `${fmtNum(l.perHour)}/hora` : null, l.perDay !== null ? `${fmtNum(l.perDay)}/dia` : null].filter(Boolean).join(" · ")}`);
@@ -350,7 +351,7 @@
     rules: {
       match: Object.fromEntries(MATCH_FIELDS.map(([k]) => [k, []])),
       selection: { action: "visitar", percentage: 20, base: "ventana", weeks: 1, strategy: "intercalado" },
-      schedule: { days: [0, 1, 2, 3, 4, 5, 6], ranges: [] },
+      schedule: { days: [0, 1, 2, 3, 4, 5, 6], ranges: [], spread: false },
       limits: { perHour: null, perDay: null },
       visit: { dwellMinMs: null, dwellMaxMs: null, blockResources: null, timeoutMs: null, maxAttempts: null },
     },
@@ -482,7 +483,18 @@
     const ranges = el("textarea", { id: "pol-ranges", rows: "2", placeholder: "08:00-13:00\n15:00-21:00" });
     ranges.value = r.schedule.ranges.map((x) => `${x.from}-${x.to}`).join("\n");
     const schedBox = el("div", { class: "fields" });
-    schedBox.append(field("Dias", dayBox), field("Franjas (vacio = todo el dia)", ranges, "hora de Alaris; fuera de horario el SMS espera a la proxima franja"));
+    const spread = el("input", { type: "checkbox", id: "pol-spread" });
+    spread.checked = Boolean(r.schedule.spread);
+    // Mismo armado que "Dias" (caja con su label adentro).
+    const spreadLabel = el("div", { class: "days" });
+    const spreadInner = el("label");
+    spreadInner.append(spread, document.createTextNode("Repartir los clicks a lo largo de la ventana"));
+    spreadLabel.append(spreadInner);
+    schedBox.append(
+      field("Dias", dayBox),
+      field("Franjas (vacio = todo el dia)", ranges, "hora de Alaris; fuera de horario el SMS espera a la proxima franja"),
+      field("Ritmo", spreadLabel, "Apagado: los elegidos de cada ventana salen todos juntos apenas se ingesta. Prendido: salen parejos durante la ventana siguiente (60 min con semana de referencia), sin contar el tiempo fuera de franja. No cambia la cantidad de pedidos a Alaris.")
+    );
     form.append(fieldset("Cuando", schedBox));
 
     // Topes
@@ -551,7 +563,7 @@
         rules: {
           match: Object.fromEntries(MATCH_FIELDS.map(([k]) => [k, lines(`pol-m-${k}`)])),
           selection,
-          schedule: { days: [...dayBox.querySelectorAll("input[data-day]")].filter((c) => c.checked).map((c) => Number(c.value)), ranges: parsedRanges },
+          schedule: { days: [...dayBox.querySelectorAll("input[data-day]")].filter((c) => c.checked).map((c) => Number(c.value)), ranges: parsedRanges, spread: spread.checked },
           limits: { perHour: num(perHour), perDay: num(perDay) },
           visit: {
             dwellMinMs: num(dwellMin),

@@ -111,6 +111,21 @@ describe("politicas en la ingesta", () => {
     assert.equal((await claimJobs("w", 10, new Date("2026-11-16T17:00:00Z"), 60_000)).length, 2);
   });
 
+  test("spread: los elegidos salen parejos a lo largo de la ventana, no todos juntos", async () => {
+    const saved = config.scheduler.windowMinutes;
+    config.scheduler.windowMinutes = 60;
+    try {
+      await createPolicy(policyInput({ name: "parejo", rules: { selection: { percentage: 100 }, schedule: { spread: true } } }), actor);
+      await ingest(sms(4, "A", T0), T0, T0);
+      const times = (await rows("SELECT next_attempt_at FROM sms_processing ORDER BY edr_date")).map((r) => new Date(r.next_attempt_at).toISOString());
+      assert.deepEqual(times, ["2026-11-16T12:00:00.000Z", "2026-11-16T12:15:00.000Z", "2026-11-16T12:30:00.000Z", "2026-11-16T12:45:00.000Z"]);
+      // El worker solo toma lo que ya le toco.
+      assert.equal((await claimJobs("w", 10, new Date("2026-11-16T12:20:00Z"), 60_000)).length, 2);
+    } finally {
+      config.scheduler.windowMinutes = saved;
+    }
+  });
+
   test("elige sobre la ventana completa: el % y la estrategia se aplican al total, no por pagina", async () => {
     const saved = config.edr.maxRowsPerRequest;
     config.edr.maxRowsPerRequest = 7; // la ventana llega en varias paginas

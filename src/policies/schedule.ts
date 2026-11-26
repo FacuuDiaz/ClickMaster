@@ -46,6 +46,51 @@ export function nextAllowedAt(schedule: ScheduleRule, date: Date, offsetMinutes:
   return date;
 }
 
+/** Fin (UTC, ms) de la franja permitida que contiene `ms`. */
+function allowedUntil(schedule: ScheduleRule, ms: number, offsetMinutes: number): number {
+  const offsetMs = offsetMinutes * 60_000;
+  const local = ms + offsetMs;
+  const localMidnight = Math.floor(local / DAY_MS) * DAY_MS;
+  const minute = (local - localMidnight) / 60_000;
+  let end = -1;
+  for (const [from, to] of rangesOf(schedule)) {
+    if (minute >= from && minute < to) end = Math.max(end, to);
+  }
+  // Sin franja (no deberia pasar: ms sale de nextAllowedAt) se avanza un
+  // minuto para no quedar en un loop.
+  return end < 0 ? ms + 60_000 : localMidnight + end * 60_000 - offsetMs;
+}
+
+/**
+ * `count` momentos repartidos parejo en `durationMs` de horario permitido a
+ * partir de `start`: el tiempo fuera de franja no cuenta (si la franja corta
+ * a mitad de camino, el resto sigue en la proxima). El primero es
+ * nextAllowedAt(start).
+ */
+export function spreadTimes(schedule: ScheduleRule, start: Date, durationMs: number, count: number, offsetMinutes: number): Date[] {
+  if (count <= 0) return [];
+  const step = durationMs / count;
+  const out: Date[] = [];
+  let cursor = nextAllowedAt(schedule, start, offsetMinutes).getTime();
+  let used = 0; // ms permitidos ya recorridos desde el primero
+  for (let i = 0; i < count; i++) {
+    let need = i * step - used;
+    for (;;) {
+      const end = allowedUntil(schedule, cursor, offsetMinutes);
+      if (cursor + need < end) {
+        cursor += need;
+        used += need;
+        break;
+      }
+      used += end - cursor;
+      need -= end - cursor;
+      cursor = nextAllowedAt(schedule, new Date(end), offsetMinutes).getTime();
+    }
+    out.push(new Date(Math.floor(cursor)));
+  }
+  return out;
+}
+
 /** Inicio de la hora y del dia (hora de Alaris) que contienen `date`, en UTC. */
 export function periodStarts(date: Date, offsetMinutes: number): { hour: Date; day: Date } {
   const offsetMs = offsetMinutes * 60_000;

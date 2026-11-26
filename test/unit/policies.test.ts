@@ -2,7 +2,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { rulesSchema, type Policy } from "../../src/policies/schema";
 import { domainOf, factsOf, matchPolicy } from "../../src/policies/match";
-import { isAllowedAt, nextAllowedAt, periodStarts } from "../../src/policies/schedule";
+import { isAllowedAt, nextAllowedAt, periodStarts, spreadTimes } from "../../src/policies/schedule";
 import { assign, HELD } from "../../src/policies/select";
 import { STRATEGIES } from "../../src/policies/schema";
 import { dayCurve, pickIndices } from "../../src/policies/strategies";
@@ -74,6 +74,28 @@ describe("politicas: horario", () => {
     // Dentro de una franja: el mismo momento.
     const inside = new Date("2026-11-16T18:00:00Z");
     assert.equal(nextAllowedAt(schedule, inside, OFFSET), inside);
+  });
+
+  test("spreadTimes reparte parejo dentro de la franja", () => {
+    const allDay = rulesSchema.parse({}).schedule;
+    const start = new Date("2026-11-16T14:05:00Z");
+    const times = spreadTimes(allDay, start, 60 * 60_000, 4, OFFSET).map((d) => d.toISOString());
+    assert.deepEqual(times, ["2026-11-16T14:05:00.000Z", "2026-11-16T14:20:00.000Z", "2026-11-16T14:35:00.000Z", "2026-11-16T14:50:00.000Z"]);
+    assert.equal(spreadTimes(allDay, start, 3_600_000, 400, OFFSET).length, 400);
+    assert.deepEqual(spreadTimes(allDay, start, 3_600_000, 0, OFFSET), []);
+  });
+
+  test("spreadTimes salta el tiempo fuera de franja", () => {
+    // 11:30 local, franja hasta 12:00: 30 min aca y los otros 30 desde las 14:00.
+    const times = spreadTimes(schedule, new Date("2026-11-16T14:30:00Z"), 60 * 60_000, 4, OFFSET).map((d) => d.toISOString());
+    assert.deepEqual(times, ["2026-11-16T14:30:00.000Z", "2026-11-16T14:45:00.000Z", "2026-11-16T17:00:00.000Z", "2026-11-16T17:15:00.000Z"]);
+    // Fuera de horario: arranca en la proxima franja.
+    assert.equal(spreadTimes(schedule, monday9, 60 * 60_000, 2, OFFSET)[0].toISOString(), "2026-11-16T13:00:00.000Z");
+  });
+
+  test("spread es opcional y apagado por defecto", () => {
+    assert.equal(rulesSchema.parse({}).schedule.spread, false);
+    assert.equal(rulesSchema.parse({ schedule: { spread: true } }).schedule.spread, true);
   });
 
   test("periodStarts alinea a la hora y al dia locales", () => {

@@ -38,7 +38,7 @@ export function parseDays(text: string): number[] | null {
 export function visitSchedule(): ScheduleRule | null {
   const v = config.visitHours;
   if (!v.enabled) return null;
-  return { days: parseDays(v.days) ?? [0, 1, 2, 3, 4, 5, 6], ranges: [{ from: v.from, to: v.to }] };
+  return { days: parseDays(v.days) ?? [0, 1, 2, 3, 4, 5, 6], ranges: [{ from: v.from, to: v.to }], spread: false };
 }
 
 export function withinVisitHours(date: Date): boolean {

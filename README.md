@@ -206,6 +206,11 @@ Cada política define:
   un ejemplo de cada una (`GET /admin/policies/strategies`).
 - **Cuándo:** días y franjas horarias (hora de Alaris). Fuera de horario el
   SMS queda `pending` con `next_attempt_at` en la próxima franja.
+  **Repartir los clicks** (`schedule.spread`, apagado por defecto): en vez de
+  mandar a la cola todos los elegidos de una ventana con el mismo
+  `next_attempt_at`, se reparten parejo a lo largo de la ventana siguiente
+  (`EDR_WINDOW_MINUTES`; 60 min con semana de referencia), sin contar el
+  tiempo fuera de franja. Se sigue haciendo un solo `get_edr` por ventana.
 - **Topes:** máximo de aprobados por hora y por día; el excedente queda
   `skipped` con `skip_reason = tope_politica`.
 - **Cómo visita:** permanencia, timeout, intentos máximos y bloqueo de

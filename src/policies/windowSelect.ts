@@ -4,7 +4,7 @@ import { pool, withTransaction, type DbConnection } from "../db/pool";
 import { alignDown, type TimeWindow } from "../edr/windows";
 import { log } from "../logger";
 import { countApprovedSince, policiesCache, repeatModeFor, type RepeatMode } from "./repo";
-import { nextAllowedAt, periodStarts } from "./schedule";
+import { nextAllowedAt, periodStarts, spreadTimes } from "./schedule";
 import { HELD } from "./select";
 import { dayCurve, pick } from "./strategies";
 import { weeklyBaseline } from "./historical";
@@ -127,6 +127,35 @@ async function updateIds(conn: DbConnection, ids: number[], sql: string, params:
 }
 
 /**
+ * Cuando sale cada uno de `count` elegidos (en orden de edr_date): todos al
+ * abrir la franja de la politica, o con schedule.spread repartidos a lo largo
+ * de una ventana de ingesta (la proxima tanda llega cuando termina esta).
+ */
+export function queueTimes(policy: Policy | null, count: number, now: Date): Date[] {
+  const offset = config.edr.timezoneOffsetMinutes;
+  if (!policy) return Array.from({ length: count }, () => now);
+  const schedule = policy.rules.schedule;
+  if (!schedule.spread) {
+    const startAt = nextAllowedAt(schedule, now, offset);
+    return Array.from({ length: count }, () => startAt);
+  }
+  return spreadTimes(schedule, now, config.scheduler.windowMinutes * 60_000, count, offset);
+}
+
+/** Pasa `ids` a la cola, cada uno con su next_attempt_at (`times[i]`). */
+async function queueIds(conn: DbConnection, ids: number[], times: Date[], set: string, where: string, params: unknown[]): Promise<void> {
+  for (let i = 0; i < ids.length; i += UPDATE_CHUNK) {
+    const slice = ids.slice(i, i + UPDATE_CHUNK);
+    const cases = slice.map(() => "WHEN ? THEN ?").join(" ");
+    await conn.query(`UPDATE sms_processing SET next_attempt_at = CASE id ${cases} END, ${set} ${where} AND id IN (?)`, [
+      ...slice.flatMap((id, j) => [id, times[i + j]]),
+      ...params,
+      slice,
+    ]);
+  }
+}
+
+/**
  * Aplica la eleccion: los elegidos (hasta el tope) quedan pending desde la
  * proxima franja de la politica; el resto, skipped. Solo toca filas que
  * siguen en_seleccion (si otra instancia ya las eligio, no hace nada).
@@ -138,13 +167,18 @@ export async function apply(policy: Policy | null, ids: number[], chosen: number
     const overCap = chosen.slice(approved.length);
     const chosenSet = new Set(chosen);
     const rest = ids.filter((id) => !chosenSet.has(id));
-    const startAt = policy ? nextAllowedAt(policy.rules.schedule, now, config.edr.timezoneOffsetMinutes) : now;
+    // En orden de edr_date (aleatorio devuelve los elegidos mezclados): al
+    // repartir, el SMS mas viejo sale primero.
+    const position = new Map(ids.map((id, i) => [id, i]));
+    approved.sort((a, b) => (position.get(a) ?? 0) - (position.get(b) ?? 0));
     const where = "WHERE skip_reason = ?";
-    await updateIds(
+    await queueIds(
       conn,
       approved,
-      `UPDATE sms_processing SET status = 'pending', skip_reason = NULL, next_attempt_at = ?, finished_at = NULL, selected_at = ? ${where}`,
-      [startAt, now, HELD]
+      queueTimes(policy, approved.length, now),
+      "status = 'pending', skip_reason = NULL, finished_at = NULL, selected_at = ?",
+      where,
+      [now, HELD]
     );
     await updateIds(conn, overCap, `UPDATE sms_processing SET skip_reason = 'tope_politica', finished_at = ? ${where}`, [now, HELD]);
     await updateIds(conn, rest, `UPDATE sms_processing SET skip_reason = 'fuera_de_muestra', finished_at = ? ${where}`, [now, HELD]);
@@ -434,18 +468,23 @@ export async function reselect(
     const approved = approve.slice(0, limit);
     const requeued = requeue.slice(0, Math.max(0, limit - approved.length));
     const overCap = approve.slice(approved.length);
-    const startAt = policy ? nextAllowedAt(policy.rules.schedule, now, config.edr.timezoneOffsetMinutes) : now;
-    await updateIds(
+    // Nuevos y re-clicks comparten el reparto (los dos son visitas de esta tanda).
+    const times = queueTimes(policy, approved.length + requeued.length, now);
+    await queueIds(
       conn,
       approved,
-      `UPDATE sms_processing SET status = 'pending', skip_reason = NULL, next_attempt_at = ?, finished_at = NULL, selected_at = ? WHERE status = 'skipped'`,
-      [startAt, now]
+      times.slice(0, approved.length),
+      "status = 'pending', skip_reason = NULL, finished_at = NULL, selected_at = ?",
+      "WHERE status = 'skipped'",
+      [now]
     );
-    await updateIds(
+    await queueIds(
       conn,
       requeued,
-      `UPDATE sms_processing SET status = 'pending', attempts = 0, next_attempt_at = ?, finished_at = NULL, selected_at = ? WHERE status IN ('success', 'failed')`,
-      [startAt, now]
+      times.slice(approved.length),
+      "status = 'pending', attempts = 0, finished_at = NULL, selected_at = ?",
+      "WHERE status IN ('success', 'failed')",
+      [now]
     );
     await updateIds(conn, overCap, `UPDATE sms_processing SET skip_reason = 'tope_politica', finished_at = ? WHERE status = 'skipped'`, [now]);
     await updateIds(conn, release, `UPDATE sms_processing SET skip_reason = 'fuera_de_muestra', finished_at = ? WHERE skip_reason = ?`, [now, HELD]);
