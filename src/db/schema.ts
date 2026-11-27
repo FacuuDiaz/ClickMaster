@@ -316,6 +316,24 @@ const CREATE_INGEST_MINUTE_COUNTS = `
   );
 `;
 
+// Modo descarte (base semana_referencia): los candidatos de la ventana en
+// curso esperan aca a que llegue la ventana entera para elegir. Antes se
+// juntaban en memoria y una hora de produccion (~460.000 SMS) llenaba el heap
+// de Node. Solo hay una ingesta a la vez (lock), asi que se vacia al empezar
+// y al terminar cada ventana. Una fila por identidad: gana la ultima version.
+const CREATE_INGEST_BUFFER = `
+  CREATE TABLE IF NOT EXISTS ingest_buffer (
+    id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    client_message_id VARCHAR(64)     NOT NULL,
+    vendor_message_id VARCHAR(64)     NOT NULL,
+    edr_date          DATETIME        NOT NULL,
+    policy_id         INT UNSIGNED    NULL,
+    record            MEDIUMTEXT      NOT NULL,
+    UNIQUE KEY uq_identity (client_message_id, vendor_message_id),
+    KEY idx_policy_edr (policy_id, edr_date, id)
+  );
+`;
+
 const CREATE_EDR_CAPTURES = `
   CREATE TABLE IF NOT EXISTS edr_captures (
     id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -374,6 +392,7 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(CREATE_POLICY_CHANGES);
   await pool.query(CREATE_ALARIS_USAGE_DAYS);
   await pool.query(CREATE_INGEST_MINUTE_COUNTS);
+  await pool.query(CREATE_INGEST_BUFFER);
 
   for (const column of SMS_LINK_CHECKS_COLUMNS) {
     if (!(await columnExists("sms_link_checks", column.name))) {

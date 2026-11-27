@@ -130,6 +130,41 @@ describe("base semana de referencia", () => {
     assert.equal(Number(c2.total), 20);
   });
 
+  test("ventana en varias paginas: los candidatos esperan en ingest_buffer, que queda vacia; los conocidos se actualizan", async () => {
+    const id = await referencePolicy(10);
+    // 40 con link + 40 sin link en la misma hora, en paginas de 15 (orden asc como la API real).
+    const data = [...sms(40, T0), ...sms(40, T0, false)];
+    const edrOf = (r: any) => new Date(r.edr_date.replace(/^(\d{4})\.(\d{2})\.(\d{2}) /, "$1-$2-$3T") + "-03:00").getTime();
+    const paged = (records: any[]) => async (range: { start: Date; end: Date }) =>
+      records
+        .filter((r) => edrOf(r) >= range.start.getTime() && edrOf(r) <= range.end.getTime())
+        .sort((a, b) => edrOf(a) - edrOf(b))
+        .slice(0, 15);
+    const saved = config.edr.maxRowsPerRequest;
+    config.edr.maxRowsPerRequest = 15;
+    try {
+      const window = { start: T0, end: new Date(T0.getTime() + 3_600_000) };
+      const run = await ingestWindow("manual", window, { fetcher: paged(data), now: () => T0 });
+      assert.equal(run.status, "success");
+      assert.ok(run.apiRequests > 1);
+      // Objetivo 10 % x 100 x 50 % = 5.
+      assert.equal(run.jobsCreated, 5);
+      assert.equal(await count("SELECT COUNT(*) FROM sms_processing WHERE policy_id = ? AND status = 'pending'", [id]), 5);
+      assert.equal(await count("SELECT COUNT(*) FROM sms_content"), 5);
+      assert.equal(await count("SELECT COUNT(*) FROM ingest_buffer"), 0);
+
+      // Reintento con el status cambiado: los 5 guardados se actualizan, no se elige de mas.
+      const again = await ingestWindow("manual", window, { fetcher: paged(data.map((r) => ({ ...r, status: "EXPIRED" }))), now: () => T0 });
+      assert.equal(again.status, "success");
+      assert.equal(again.smsExisting, 5);
+      assert.equal(await count("SELECT COUNT(*) FROM sms_content"), 5);
+      assert.equal(await count("SELECT COUNT(*) FROM sms_content WHERE status = 'EXPIRED'"), 5);
+      assert.equal(await count("SELECT COUNT(*) FROM ingest_buffer"), 0);
+    } finally {
+      config.edr.maxRowsPerRequest = saved;
+    }
+  });
+
   test("con otra politica activa se guarda todo, como siempre, y tambien se cuenta", async () => {
     await createPolicy(policyInputSchema.parse({ enabled: true, name: "ventana", rules: { selection: { percentage: 50 } } }), actor);
     await ingest([...sms(10, T0), ...sms(4, T0, false)], T0, T0);

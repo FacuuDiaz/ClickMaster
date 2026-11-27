@@ -24,10 +24,8 @@ import { runPendingChanges } from "../policies/retake";
 import type { Policy } from "../policies/schema";
 import { insertCaptureSafe } from "../captures/repo";
 import { MinuteCounter, saveMinuteCounts } from "../db/minuteCountsRepo";
-import { messageKey } from "../db/smsContentRepo";
 import { factsOf, matchPolicy } from "../policies/match";
-import { selectInMemory } from "../policies/discardSelect";
-import type { SmsRecord } from "../parser/smsRecordSchema";
+import { bufferBatch, clearBuffer, selectBuffered } from "../policies/discardSelect";
 import { requestArgs } from "../fetcher/apiClient";
 
 export const INGEST_LOCK = "ingesta";
@@ -92,14 +90,16 @@ export async function ingestWindow(
   try {
     const policies = await policiesCache.refresh().then(() => policiesCache.active());
     const minutes = new MinuteCounter(window);
-    // semana_referencia: se elige en memoria y solo se guardan los elegidos.
-    const buffer = discardMode(policies) ? new Map<string, SmsRecord>() : null;
-    await ingestRange(query, { policies, fetcher, now, runId, counters, invalidSamples, invalidRaw, ctx, minutes, buffer });
+    // semana_referencia: los candidatos esperan en ingest_buffer y solo se
+    // guardan los elegidos. Se vacia antes por si un intento anterior se corto.
+    const discard = discardMode(policies);
+    if (discard) await clearBuffer();
+    await ingestRange(query, { policies, fetcher, now, runId, counters, invalidSamples, invalidRaw, ctx, minutes, discard });
     // Antes de elegir: la proporcion con link de las cuotas sale de aca.
     await saveMinuteCounts(minutes, policies[0]?.id ?? null, now());
-    if (buffer) {
-      const selected = await selectInMemory([...buffer.values()], query, policies, runId, now(), ctx);
-      buffer.clear();
+    if (discard) {
+      const selected = await selectBuffered(query, policies, runId, now(), ctx);
+      await clearBuffer();
       counters.smsNew += selected.smsNew;
       counters.smsExisting += selected.smsExisting;
       counters.jobsCreated += selected.approved;
@@ -171,8 +171,8 @@ interface RangeContext {
   ctx: Record<string, unknown>;
   // Conteo por minuto de lo que llega (todas las politicas).
   minutes: MinuteCounter;
-  // Modo descarte: los registros validos se juntan aca en vez de guardarse.
-  buffer: Map<string, SmsRecord> | null;
+  // Modo descarte: los candidatos van a ingest_buffer en vez de guardarse.
+  discard: boolean;
 }
 
 /** La politica activa (una sola) es semana_referencia y visita. */
@@ -344,9 +344,11 @@ async function processRecords(records: unknown[], rc: RangeContext): Promise<voi
       const policy = facts.link ? matchPolicy(rc.policies, facts) : null;
       rc.minutes.add(new Date(r.edr_date), Boolean(facts.link), Boolean(policy && policy.rules.selection.action === "visitar"));
     }
-    if (rc.buffer) {
-      // Si la misma identidad viene dos veces gana la ultima (la mas nueva).
-      for (const r of valid) rc.buffer.set(messageKey(r.client_message_id, r.vendor_message_id), r);
+    if (rc.discard) {
+      const result = await bufferBatch(valid, rc.policies, rc.runId, rc.now());
+      rc.counters.smsNew += result.smsNew;
+      rc.counters.smsExisting += result.smsExisting;
+      rc.counters.jobsSkipped += result.discarded;
       await heartbeatRun(rc.runId, rc.counters, rc.now());
       continue;
     }

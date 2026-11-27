@@ -194,9 +194,12 @@ Cada política define:
     A cada hora de hoy le toca X % de lo que hubo a esa misma hora el mismo día
     de la semana de referencia (martes con martes), por la proporción con link
     de hoy. Con esta política activa la ventana de ingesta pasa a 60 min y
-    **solo se guardan los SMS elegidos**: la ventana se junta en memoria, se
-    elige con la estrategia y el resto se descarta (queda contado en
-    `ingest_minute_counts`). El Panel muestra el gráfico de la semana con lo de
+    **solo se guardan los SMS elegidos**: mientras llega la ventana, los
+    candidatos (con link y de una política que visita) esperan en la tabla de
+    trabajo `ingest_buffer`; al final se elige con la estrategia, se guardan
+    los elegidos y el resto se descarta (queda contado en
+    `ingest_minute_counts`). No se junta en memoria: una hora de producción
+    (~460.000 SMS) llenaba el heap de Node y la app se caía. El Panel muestra el gráfico de la semana con lo de
     hoy encima del día equivalente y un botón para volver a bajarla. Un cambio
     de política a mitad del día solo puede re-elegir entre lo guardado.
 - **Cuáles visita (estrategia),** sobre los SMS del período ordenados por
