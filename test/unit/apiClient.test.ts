@@ -1,12 +1,13 @@
 import { after, before, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import zlib from "node:zlib";
 import type { AddressInfo } from "node:net";
 import { config } from "../../src/config";
 import { EdrError, fetchEdrRange } from "../../src/fetcher/apiClient";
 
 // API EDR de mentira: cada test define que responde. Nada sale de la maquina.
-let respond: (body: any) => { status: number; json?: unknown; raw?: string; delayMs?: number };
+let respond: (body: any) => { status: number; json?: unknown; raw?: string; delayMs?: number; encoding?: "gzip" | "deflate" | "roto" };
 const received: any[] = [];
 let server: http.Server;
 
@@ -20,8 +21,15 @@ before(async () => {
       const r = respond(parsed);
       setTimeout(() => {
         if (res.destroyed) return;
+        const text = r.raw ?? JSON.stringify(r.json);
+        if (r.encoding) {
+          const payload = r.encoding === "gzip" ? zlib.gzipSync(text) : r.encoding === "deflate" ? zlib.deflateSync(text) : Buffer.from("no es gzip");
+          res.writeHead(r.status, { "Content-Type": "application/json", "Content-Encoding": r.encoding === "roto" ? "gzip" : r.encoding });
+          res.end(payload);
+          return;
+        }
         res.writeHead(r.status, { "Content-Type": "application/json" });
-        res.end(r.raw ?? JSON.stringify(r.json));
+        res.end(text);
       }, r.delayMs ?? 0);
     });
   });
@@ -65,6 +73,22 @@ describe("cliente JSON-RPC de EDR", () => {
       country: "Brazil",
       orderby_clause: "edr_date asc",
     });
+  });
+
+  test("pide la respuesta comprimida y la descomprime (gzip y deflate)", async () => {
+    for (const encoding of ["gzip", "deflate"] as const) {
+      received.length = 0;
+      const data = Array.from({ length: 200 }, (_, i) => ({ i, text: `Oferta ${i}: https://cutt.ly/t${i}` }));
+      respond = () => ({ status: 200, encoding, json: { jsonrpc: "2.0", id: 1, result: { data } } });
+      assert.deepEqual(await fetchEdrRange(range), data);
+      assert.match(String(received[0].headers["accept-encoding"]), new RegExp(encoding));
+    }
+  });
+
+  test("una respuesta gzip corrupta falla con error claro y se reintenta", async () => {
+    respond = () => ({ status: 200, encoding: "roto", json: {} });
+    await assert.rejects(fetchEdrRange(range), (err: unknown) => err instanceof EdrError && /gzip invalida/.test(err.message));
+    assert.equal(received.length, 3);
   });
 
   test("EDR_EXTRA_ARGS agrega o pisa argumentos (ej. producto numerico)", async () => {

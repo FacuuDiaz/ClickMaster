@@ -159,7 +159,12 @@ async function requestOnce(range: EdrRange, ctx: FetchContext = {}): Promise<unk
     start: range.start.toISOString(),
     end: range.end.toISOString(),
     durationMs: Date.now() - startedAt,
+    // ttfbMs = lo que tardo Alaris en empezar a responder; el resto de
+    // durationMs es la transferencia (wireBytes, comprimidos si encoding).
+    ttfbMs: res.ttfbMs,
     bytes,
+    wireBytes: res.wireBytes,
+    encoding: res.encoding,
   });
 
   // JSON-RPC informa los errores con HTTP 200 y un campo "error" en el body.
