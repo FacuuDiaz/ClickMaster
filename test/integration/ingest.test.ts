@@ -183,6 +183,29 @@ describe("ingesta y persistencia", () => {
     assert.equal(run.smsExisting, 0);
   });
 
+  test("rango por consulta: pide la ventana en tramos, pagina dentro del tramo y no duplica el segundo de corte", async () => {
+    // La API falsa toma el fin como inclusivo: los del borde de cada tramo llegan dos veces.
+    config.edr.maxRowsPerRequest = 7;
+    config.edr.requestSpanSeconds = 300;
+    try {
+      const api = cappedApi(7, "asc");
+      const run = await ingestWindow("manual", win(0, 30), { fetcher: api.fetcher });
+      assert.equal(run.status, "success", run.error ?? "");
+      // Ninguna consulta cubre mas de 5 minutos.
+      assert.ok(api.requested.every((r) => r.end.getTime() - r.start.getTime() <= 300_000));
+      assert.ok(api.requested.some((r) => r.start.getTime() === minutes(25).getTime() && r.end.getTime() === minutes(30).getTime()));
+      // Con ~10 por tramo y tope 7 hubo paginas dentro de los tramos.
+      assert.ok(run.apiRequests > 6);
+      assert.equal(await count("SELECT COUNT(*) FROM sms_content"), api.all.length);
+      assert.equal(run.recordsReceived, api.all.length);
+      assert.equal(run.smsExisting, 0);
+      const inWindow = api.all.filter((r) => api.t(r) < minutes(30).getTime()).length;
+      assert.equal(await count("SELECT COALESCE(SUM(total), 0) FROM ingest_minute_counts"), inWindow);
+    } finally {
+      config.edr.requestSpanSeconds = 0;
+    }
+  });
+
   test("respuesta en el tope descendente: avanza hacia atras con el mismo inicio", async () => {
     config.edr.maxRowsPerRequest = 25;
     const api = cappedApi(25, "desc");

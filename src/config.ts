@@ -146,6 +146,12 @@ export const config = {
     // Si una respuesta llega al tope se pide la pagina siguiente desde la
     // fecha del ultimo registro. Tope de paginas por rango (contra loops).
     maxPagesPerWindow: int("EDR_MAX_PAGES_PER_WINDOW", 50, 1, 10_000),
+    // Cada consulta a Alaris cubre como mucho este rango (la ventana se pide
+    // en tramos seguidos). Alaris tarda segun el rango que recorre, no segun
+    // las filas que devuelve: en produccion 1 hora ~245 s, 4 min ~45 s,
+    // 4 s ~20 s. Pedir la hora entera y paginar recorria la hora restante
+    // en cada pagina. 0 = la ventana entera en una consulta.
+    requestSpanSeconds: int("EDR_REQUEST_SPAN_SECONDS", 120, 0),
   },
 
   // REST API de la plataforma (sms_usage_stats): cuantos SMS mando el

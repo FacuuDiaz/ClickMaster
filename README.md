@@ -421,6 +421,13 @@ no avanza).
     = 3 consultas. Los registros del segundo de corte vuelven a llegar y se
     descartan por identidad. Tope de páginas por rango:
     `EDR_MAX_PAGES_PER_WINDOW` (50).
+  - **En tramos:** la ventana no se pide entera sino en tramos seguidos de
+    `EDR_REQUEST_SPAN_SECONDS` (120 s), y se pagina dentro de cada tramo.
+    Alaris tarda según el rango que recorre, no según las filas que devuelve
+    (producción: 1 hora ~245 s por consulta, 4 min ~45 s, 4 s ~20 s): pedir la
+    hora entera y paginar recorría la hora restante en cada página y bajar una
+    hora llevaba casi dos. Los del segundo de corte entre tramos se procesan
+    solo en el tramo siguiente.
   - **Desordenada** (no debería pasar; red de seguridad): no hay un "último" confiable, así que se descarta y el
     rango se pide en dos mitades hasta `EDR_MIN_SPLIT_SECONDS` (respaldo:
     más lento, correcto con cualquier orden). Queda un `warn` en el log.
@@ -574,6 +581,7 @@ reiniciar. Las principales:
 | `EDR_TIMEZONE_OFFSET` | `-03:00` | Zona de las fechas de la API |
 | `EDR_WINDOW_MINUTES` / `EDR_SAFETY_DELAY_MINUTES` / `EDR_OVERLAP_MINUTES` | 30 / 5 / 0 | Ventanas |
 | `EDR_MAX_ROWS_PER_REQUEST` / `EDR_MAX_PAGES_PER_WINDOW` / `EDR_MIN_SPLIT_SECONDS` | 20000 / 50 / 1 | Tope de la API; al llegar se pide la página siguiente desde el último registro (0 = sin tope). Rango mínimo solo para respuestas desordenadas |
+| `EDR_REQUEST_SPAN_SECONDS` | 120 | Largo de cada consulta: la ventana se pide en tramos (0 = entera) |
 | `EDR_HTTP_TIMEOUT_MS` / `EDR_MAX_RETRIES` | 600000 / 1 | Tiempo máximo para recibir la respuesta completa de Alaris (puede tardar minutos) / reintentos |
 | `INGEST_DB_BATCH_SIZE` | 500 | Filas por transacción (máx. 2000) |
 | `CHECK_CONCURRENCY` | 4 | Sesiones de Chromium simultáneas (worker y clicks) |

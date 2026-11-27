@@ -15,7 +15,7 @@ import {
 } from "../db/syncRunsRepo";
 import { fetchEdrRange, type EdrFetcher } from "../fetcher/apiClient";
 import { validateRecords } from "../parser/smsRecordSchema";
-import { nextScheduledWindow, splitRange, type TimeWindow } from "../edr/windows";
+import { nextScheduledWindow, requestSpans, splitRange, type TimeWindow } from "../edr/windows";
 import { parseApiDate } from "../edr/apiTime";
 import { persistSmsBatch } from "./ingestBatch";
 import { policiesCache } from "../policies/repo";
@@ -94,7 +94,16 @@ export async function ingestWindow(
     // guardan los elegidos. Se vacia antes por si un intento anterior se corto.
     const discard = discardMode(policies);
     if (discard) await clearBuffer();
-    await ingestRange(query, { policies, fetcher, now, runId, counters, invalidSamples, invalidRaw, ctx, minutes, discard });
+    const rc: RangeContext = { policies, fetcher, now, runId, counters, invalidSamples, invalidRaw, ctx, minutes, discard, dropFromMs: null };
+    // En tramos chicos: Alaris tarda segun el rango que recorre (ver config.edr.requestSpanSeconds).
+    const spans = requestSpans(query, config.edr.requestSpanSeconds);
+    for (let i = 0; i < spans.length; i++) {
+      // Los del segundo de corte llegan tambien en el tramo siguiente (que
+      // empieza en ese segundo) si la API toma el fin como inclusivo: se
+      // procesan solo ahi, asi no se cuentan dos veces.
+      const last = i === spans.length - 1;
+      await ingestRange(spans[i], { ...rc, dropFromMs: last ? null : spans[i].end.getTime() });
+    }
     // Antes de elegir: la proporcion con link de las cuotas sale de aca.
     await saveMinuteCounts(minutes, policies[0]?.id ?? null, now());
     if (discard) {
@@ -173,6 +182,9 @@ interface RangeContext {
   minutes: MinuteCounter;
   // Modo descarte: los candidatos van a ingest_buffer en vez de guardarse.
   discard: boolean;
+  // Tramo que no es el ultimo: se ignoran los registros desde este instante
+  // (los trae el tramo siguiente).
+  dropFromMs: number | null;
 }
 
 /** La politica activa (una sola) es semana_referencia y visita. */
@@ -322,6 +334,13 @@ async function splitInHalves(range: TimeWindow, rows: number, rc: RangeContext):
  * Los SMS quedan en_seleccion: se eligen al final de la ventana (selectHeld).
  */
 async function processRecords(records: unknown[], rc: RangeContext): Promise<void> {
+  if (rc.dropFromMs !== null) {
+    const from = rc.dropFromMs;
+    records = records.filter((r) => {
+      const ms = edrMs(r);
+      return ms === null || ms < from;
+    });
+  }
   rc.counters.recordsReceived += records.length;
   const batchSize = config.ingest.dbBatchSize;
   for (let i = 0; i < records.length; i += batchSize) {

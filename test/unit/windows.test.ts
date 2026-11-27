@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { alignDown, nextScheduledWindow, splitRange } from "../../src/edr/windows";
+import { alignDown, nextScheduledWindow, requestSpans, splitRange } from "../../src/edr/windows";
 
 const plan = { windowMinutes: 30, safetyDelayMinutes: 5, offsetMinutes: -180 };
 const iso = (d: Date | undefined) => d?.toISOString();
@@ -55,6 +55,17 @@ describe("ventanas EDR", () => {
       () => nextScheduledWindow(null, new Date(), { ...plan, startDate: "ayer" }),
       /EDR_START_DATE invalida/
     );
+  });
+
+  test("requestSpans parte en tramos seguidos; 0 o un rango corto = el rango entero", () => {
+    const range = { start: new Date("2026-10-14T12:00:00Z"), end: new Date("2026-10-14T12:05:00Z") };
+    const spans = requestSpans(range, 120);
+    assert.deepEqual(
+      spans.map((s) => [s.start.toISOString().slice(11, 19), s.end.toISOString().slice(11, 19)]),
+      [["12:00:00", "12:02:00"], ["12:02:00", "12:04:00"], ["12:04:00", "12:05:00"]]
+    );
+    assert.deepEqual(requestSpans(range, 0), [range]);
+    assert.deepEqual(requestSpans(range, 300), [range]);
   });
 
   test("splitRange parte al segundo y las mitades se tocan", () => {

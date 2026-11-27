@@ -62,6 +62,21 @@ export function nextScheduledWindow(
   return end.getTime() <= horizon.getTime() ? { start, end } : null;
 }
 
+/**
+ * Parte un rango en tramos seguidos de `spanSeconds` como mucho (el ultimo
+ * puede ser mas corto). spanSeconds = 0 o un rango mas chico: el rango entero.
+ */
+export function requestSpans(range: TimeWindow, spanSeconds: number): TimeWindow[] {
+  const spanMs = spanSeconds * 1000;
+  const endMs = range.end.getTime();
+  if (spanMs <= 0 || endMs - range.start.getTime() <= spanMs) return [range];
+  const out: TimeWindow[] = [];
+  for (let t = range.start.getTime(); t < endMs; t += spanMs) {
+    out.push({ start: new Date(t), end: new Date(Math.min(t + spanMs, endMs)) });
+  }
+  return out;
+}
+
 /** Parte un rango en dos mitades redondeadas al segundo (la API no tiene milisegundos). */
 export function splitRange(range: TimeWindow): [TimeWindow, TimeWindow] {
   const halfMs = Math.floor((range.end.getTime() - range.start.getTime()) / 2 / 1000) * 1000;

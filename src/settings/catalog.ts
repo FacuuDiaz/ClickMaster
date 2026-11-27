@@ -110,6 +110,8 @@ export const SETTINGS: SettingDef[] = [
     description: "Lo maximo que Alaris devuelve por consulta (20.000). Si una respuesta llega a este numero, se pide la pagina siguiente desde la fecha del ultimo registro hasta el mismo fin. 0 = sin tope (nunca pagina)." }),
   int({ path: "edr.maxPagesPerWindow", group: "edr", label: "Paginas maximas por ventana", env: "EDR_MAX_PAGES_PER_WINDOW", min: 1, max: 10000,
     description: "Corte de seguridad: si una ventana necesita mas consultas que esto, falla y se reintenta. 50 paginas = hasta 1.000.000 de SMS por ventana." }),
+  int({ path: "edr.requestSpanSeconds", group: "edr", label: "Rango por consulta", env: "EDR_REQUEST_SPAN_SECONDS", unit: "s", min: 0,
+    description: "Cada ventana se pide a Alaris en tramos de este largo. Alaris tarda segun el rango que recorre (una hora entera ~4 min por consulta, 2 min ~30-45 s), asi que tramos chicos bajan la ventana mucho mas rapido. Si un tramo llega al tope de filas, se pagina dentro del tramo. 0 = la ventana entera en una consulta." }),
   int({ path: "edr.minSplitSeconds", group: "edr", label: "Rango minimo al partir (respaldo)", env: "EDR_MIN_SPLIT_SECONDS", unit: "s", min: 1,
     description: "Solo si Alaris devuelve una respuesta en el tope DESORDENADA: en ese caso no se puede seguir desde el ultimo registro y el rango se parte en mitades hasta este minimo." }),
 
